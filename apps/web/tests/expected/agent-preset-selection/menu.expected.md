@@ -1,4 +1,5 @@
 - menu:
+  - menuitem "PMS 项目助手 专注 PMS 项目、节点、任务和成员操作的业务 Agent。"
   - menuitem "Standard mode Full coding agent with file editing, shell, file and web search, skills, planning, goals, subagents, and workflows.":
     - text: Standard mode Full coding agent with file editing, shell, file and web search, skills, planning, goals, subagents, and workflows.
     - img

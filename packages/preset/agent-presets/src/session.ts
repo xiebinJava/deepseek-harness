@@ -25,7 +25,11 @@ declare module '@deepseek-ai/dsh-session/types' {
      * under, so a resumed or forked session rebuilds the same one instead of
      * the header's creation-time value.
      */
-    'agent-preset/selected': { agentPreset: string }
+    'agent-preset/selected': {
+      agentPreset: string
+      /** SHA-256 identity of the exact composition mounted for this session. */
+      agentCompositionFingerprint?: string
+    }
   }
 }
 
@@ -42,3 +46,23 @@ export const agentPresetProjectionDefinition = {
   wire: { viewSchema: agentPresetSchema, view: state => state },
   stateVersion: 1,
 } satisfies ProjectionDefinition<'agentPreset', string | null>
+
+const agentCompositionFingerprintSchema = z.union([z.string(), z.null()])
+
+/** Exact mounted composition identity for the current Session Agent. */
+export const agentCompositionFingerprintProjectionDefinition = {
+  key: 'agentCompositionFingerprint',
+  stateSchema: agentCompositionFingerprintSchema,
+  init: () => null,
+  apply: (state, event) => event.type === 'agent-preset/selected'
+    // A legacy selection event identifies a new Agent but not its exact
+    // composition. Carrying the previous Agent's fingerprint would make a
+    // mixed-version switch look reproducible when it is not.
+    ? event.data.agentCompositionFingerprint ?? null
+    : state,
+  wire: {
+    viewSchema: agentCompositionFingerprintSchema,
+    view: state => state,
+  },
+  stateVersion: 1,
+} satisfies ProjectionDefinition<'agentCompositionFingerprint', string | null>

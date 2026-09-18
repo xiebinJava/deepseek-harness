@@ -38,6 +38,10 @@ const SEAT_READY: AgentPresetSeatState = {
   busy: false,
   error: null,
   introduce: false,
+  workspaceType: null,
+  source: 'auto',
+  locked: false,
+  lockedAgentPreset: null,
 }
 
 const useSessionRetainInfo = <Selected,>(selector: (value: undefined) => Selected): Selected => selector(undefined)
@@ -112,6 +116,8 @@ describe('the new-session chip', () => {
 
     await waitFor(() => { expect(actions.load).toHaveBeenCalledTimes(1) })
     expect(screen.getByRole('button').textContent).toContain(en.presetStandardName)
+    expect(screen.getByRole('button').getAttribute('aria-label'))
+      .toBe(`${en.currentAgent}：${en.presetStandardName}`)
     expect(screen.getByRole('button').getAttribute('title')).toBe(en.seatHint)
   })
 
@@ -157,6 +163,15 @@ describe('the new-session chip', () => {
     expect(screen.getByRole('button')).toHaveProperty('disabled', true)
   })
 
+  it('keeps the current Agent visible but read-only after the session starts', () => {
+    renderSeat({ locked: true, lockedAgentPreset: 'standard' })
+
+    const button = screen.getByRole('button')
+    expect(button).toHaveProperty('disabled', true)
+    expect(button.getAttribute('aria-label')).toBe(`${en.currentAgent}：${en.presetStandardName}`)
+    expect(button.getAttribute('title')).toBe(en.sessionLocked)
+  })
+
   it('shows a refused switch on the trigger', () => {
     renderSeat({ error: 'session has already started' })
 
@@ -171,6 +186,14 @@ describe('the new-session chip', () => {
 
     renderSeat({ current: '' })
     expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  it('explains when the selected Agent is unavailable instead of disappearing', () => {
+    renderSeat({ options: [], current: 'pms-project-assistant', error: 'Agent load failed' })
+
+    expect(screen.getByRole('status').textContent)
+      .toContain(translate('agentUnavailable', { id: 'pms-project-assistant' }))
+    expect(screen.getByRole('status').textContent).toContain('pms-project-assistant')
   })
 
   it('closes on an outside dismissal', () => {

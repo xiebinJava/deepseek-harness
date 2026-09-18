@@ -43,6 +43,7 @@ export {
   serverResponseSchema,
 } from './rpc-schema.ts'
 export { HostConnectionService } from './rpc-host.ts'
+export type { BrowserAuthOidcConfig } from './browser-auth.ts'
 
 export { API_PATH } from './api-path.ts'
 
@@ -126,11 +127,8 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
   assertImageBodyCapacity(ctx, maxRequestBodyBytes)
-  const connection = new HostConnectionService(
-    ctx,
-    trustedHosts,
-    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
-  )
+  const browserAuth = await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays)
+  const connection = new HostConnectionService(ctx, trustedHosts, browserAuth)
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)
     webCtx.on('webserver/index-inject', (table) => {
@@ -151,6 +149,11 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
       },
     }
     webCtx.effect(() => webCtx.webServer.register(route), 'client-connection: /api route')
+    webCtx.effect(() => webCtx.webServer.register({
+      kind: 'exact',
+      path: '/auth/oidc/callback',
+      handler: (req, res) => browserAuth.handleOidcCallback(req, res),
+    }), 'client-connection: OIDC callback')
   })
   ctx.inject(['attachments'], (attachmentCtx) => {
     assertImageBodyCapacity(attachmentCtx, maxRequestBodyBytes)

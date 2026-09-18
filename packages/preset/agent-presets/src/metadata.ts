@@ -36,6 +36,12 @@ export interface PresetMetadata {
    * can read in capability order while authored ones stay alphabetical.
    */
   readonly order?: number
+  /** Workspace types this preset is intended for; absent means generic. */
+  readonly workspaceTypes?: readonly string[]
+  /** Capability labels shown to a selector or configuration surface. */
+  readonly capabilities?: readonly string[]
+  /** Whether this published preset may be selected for new sessions. */
+  readonly enabled?: boolean
 }
 
 /** A non-empty trimmed string, or undefined for anything else. */
@@ -43,6 +49,16 @@ function text(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   return trimmed === '' ? undefined : trimmed
+}
+
+/** Read a non-empty string list while ignoring malformed entries. */
+function textList(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const values = [...new Set(value
+    .filter((item): item is string => typeof item === 'string')
+    .map(item => item.trim())
+    .filter(item => item !== ''))]
+  return values.length === 0 ? undefined : values
 }
 
 /**
@@ -77,10 +93,16 @@ export async function readPresetMetadata(directory: string): Promise<PresetMetad
   const order = typeof record.order === 'number' && Number.isFinite(record.order)
     ? record.order
     : undefined
+  const workspaceTypes = textList(record.workspaceTypes)
+  const capabilities = textList(record.capabilities)
+  const enabled = typeof record.enabled === 'boolean' ? record.enabled : undefined
   return {
     ...name === undefined ? {} : { name },
     ...description === undefined ? {} : { description },
     ...order === undefined ? {} : { order },
+    ...workspaceTypes === undefined ? {} : { workspaceTypes },
+    ...capabilities === undefined ? {} : { capabilities },
+    ...enabled === undefined ? {} : { enabled },
   }
 }
 
@@ -96,10 +118,23 @@ export function renderPresetMetadata(metadata: PresetMetadata): string | undefin
   const name = text(metadata.name)
   const description = text(metadata.description)
   const { order } = metadata
-  if (name === undefined && description === undefined && order === undefined) return undefined
+  const workspaceTypes = textList(metadata.workspaceTypes)
+  const capabilities = textList(metadata.capabilities)
+  const enabled = metadata.enabled
+  if (
+    name === undefined
+    && description === undefined
+    && order === undefined
+    && workspaceTypes === undefined
+    && capabilities === undefined
+    && enabled === undefined
+  ) return undefined
   return yaml.dump({
     ...name === undefined ? {} : { name },
     ...description === undefined ? {} : { description },
     ...order === undefined ? {} : { order },
+    ...workspaceTypes === undefined ? {} : { workspaceTypes },
+    ...capabilities === undefined ? {} : { capabilities },
+    ...enabled === undefined ? {} : { enabled },
   }, { lineWidth: -1 })
 }

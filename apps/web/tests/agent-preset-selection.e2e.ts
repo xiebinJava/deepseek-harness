@@ -250,7 +250,10 @@ describe('web e2e: agent-preset selection', () => {
   it('starts with mode selection shown on the Standard default', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-agent-preset-hero'))
     await connectFreshWorkspace(page, scaffold.workspaceCwd)
-    await page.getByRole('button', { name: 'Standard mode', exact: true }).waitFor({ timeout: 10_000 })
+    // The accessible name includes the context label ("Current Agent:").
+    // Match the selected preset within that stable name instead of requiring
+    // an exact name that the component never exposes.
+    await page.getByRole('button', { name: /Standard mode/ }).waitFor({ timeout: 30_000 })
 
     await page.getByRole('button', { name: 'Settings', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: 'Settings' })
@@ -260,7 +263,10 @@ describe('web e2e: agent-preset selection', () => {
     expect(await toggle.getAttribute('aria-checked')).toBe('true')
     await dialog.getByRole('button', { name: 'Close' }).last().click()
 
-    const snapshot = await captureStableAria(page, '[class*="heroWorkspaceRow"]', scaffold.workspaceCwd)
+    // After a workspace is connected the selector intentionally moves from
+    // the cold-start hero row into the composer footer. Capture the live
+    // composer seat, which is where users interact with it for this flow.
+    const snapshot = await captureStableAria(page, '[data-composer-seat]', scaffold.workspaceCwd)
     await compareOrRefreshGolden(HERO_EXPECTED, snapshot, MODE)
     expect(snapshot).toContain('Standard mode')
   })

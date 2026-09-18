@@ -103,6 +103,56 @@ function fakeCtx(
             ...preset.name === undefined ? {} : { name: preset.name },
           })
         },
+        readDraft: (agentPreset: string) => {
+          record('readDraft', { agentPreset })
+          return remoteOk({
+            agentPreset,
+            revision: 'draft-r1',
+            identityPrompt: '你是 PMS 项目助手。',
+            behaviorPrompt: '先查询，再预览。',
+            selectedSkills: ['pms-context'],
+            selectedPlugins: ['pms'],
+            workspaceBindings: ['pms'],
+            version: 0,
+            availableSkills: [{ id: 'pms-context', label: 'PMS 上下文读取' }],
+            availablePlugins: [{ id: 'pms', label: 'PMS 能力' }],
+            availableWorkspaces: [{ id: 'pms', label: 'PMS 业务工作区' }],
+            history: [],
+          })
+        },
+        saveDraft: (agentPreset: string, expectedRevision: string, draft: unknown) => {
+          record('saveDraft', { agentPreset, expectedRevision, draft })
+          return remoteOk({
+            agentPreset,
+            revision: 'draft-r2',
+            ...(draft as Record<string, unknown>),
+            version: 0,
+            availableSkills: [{ id: 'pms-context', label: 'PMS 上下文读取' }],
+            availablePlugins: [{ id: 'pms', label: 'PMS 能力' }],
+            availableWorkspaces: [{ id: 'pms', label: 'PMS 业务工作区' }],
+            history: [],
+          })
+        },
+        publishDraft: (agentPreset: string, expectedRevision: string) => {
+          record('publishDraft', { agentPreset, expectedRevision })
+          return remoteOk({
+            agentPreset, version: 1, revision: expectedRevision,
+            fingerprint: 'f'.repeat(64), publishedAt: '2026-09-17T00:00:00.000Z',
+          })
+        },
+        testDraft: (agentPreset: string, draft: unknown) => {
+          record('testDraft', { agentPreset, draft })
+          return remoteOk({
+            agentPreset,
+            revision: 'preview-r1',
+            version: 0,
+            selectedSkills: ['pms-context'],
+            selectedPlugins: ['pms'],
+            availableTools: ['pms_project_list', 'pms_command_preview'],
+            blockedTools: ['pms_command_execute'],
+            message: '仅预览，未执行。',
+          })
+        },
         // Arity is checked against the declaration, not against which arguments
         // carry a value, so a short call rejects instead of answering. Reject
         // one here too: the real face would, and a lenient double hid it once.
@@ -289,6 +339,60 @@ describe('the read-only viewer', () => {
     expect(controller.store.getSnapshot().error).toBe('no peeking')
   })
 
+})
+
+describe('the Agent editor', () => {
+  it('loads a structured draft, saves edits, and publishes the selected composition', async () => {
+    const { controller, calls } = harness()
+    await controller.load()
+
+    await controller.beginEdit('mine')
+
+    expect(controller.store.getSnapshot().editor?.draft.identityPrompt)
+      .toBe('你是 PMS 项目助手。')
+    controller.setEditorPrompt('behaviorPrompt', '必须先查询真实数据。')
+    await controller.saveEditorDraft()
+    expect(calls.find(call => call.method === 'saveDraft')?.payload).toMatchObject({
+      agentPreset: 'mine', expectedRevision: 'draft-r1',
+      draft: expect.objectContaining({ behaviorPrompt: '必须先查询真实数据。' }),
+    })
+
+    await controller.publishEditorDraft()
+
+    expect(calls.find(call => call.method === 'publishDraft')?.payload)
+      .toEqual({ agentPreset: 'mine', expectedRevision: 'draft-r2' })
+    expect(controller.store.getSnapshot().editor).toBeNull()
+  })
+
+  it('does not allow editing a shipped preset', async () => {
+    const { controller, calls } = harness()
+    await controller.load()
+
+    await controller.beginEdit('standard')
+
+    expect(controller.store.getSnapshot().editor).toBeNull()
+    expect(controller.store.getSnapshot().error).toContain('read-only')
+    expect(calls.some(call => call.method === 'readDraft')).toBe(false)
+  })
+
+  it('previews the current draft without saving or publishing it', async () => {
+    const { controller, calls } = harness()
+    await controller.load()
+    await controller.beginEdit('mine')
+
+    await controller.testEditorDraft()
+
+    expect(calls.find(call => call.method === 'testDraft')?.payload).toMatchObject({
+      agentPreset: 'mine',
+      draft: expect.objectContaining({ selectedPlugins: ['pms'] }),
+    })
+    expect(controller.store.getSnapshot().editor?.testResult).toMatchObject({
+      availableTools: ['pms_project_list', 'pms_command_preview'],
+      blockedTools: ['pms_command_execute'],
+    })
+    expect(calls.some(call => call.method === 'saveDraft')).toBe(false)
+    expect(calls.some(call => call.method === 'publishDraft')).toBe(false)
+  })
 })
 
 describe('the copy dialog', () => {

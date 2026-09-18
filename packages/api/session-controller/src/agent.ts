@@ -361,6 +361,11 @@ export class ApiSessionAgentController {
     return this.ctx.sessionProjections.stateOf(session, 'agentPreset') ?? undefined
   }
 
+  /** Read the exact composition generation recorded for a live Session. */
+  compositionFingerprintForSession(session: Session): string | undefined {
+    return this.ctx.sessionProjections.stateOf(session, 'agentCompositionFingerprint') ?? undefined
+  }
+
   /**
    * Serialize image admission and model selection for one Agent.
    * @param agent - live Agent that owns the serialization chain.
@@ -380,6 +385,7 @@ export class ApiSessionAgentController {
    */
   async composeAgent(presetId: string | undefined): Promise<{
     readonly agentPreset?: string
+    readonly agentCompositionFingerprint?: string
     readonly setup: AgentSetup
   }> {
     const presets = this.ctx.get('agentPresets')
@@ -392,6 +398,43 @@ export class ApiSessionAgentController {
       setup: async (agentCtx, agent) => {
         this.installSelection(agent)
         await presets.mount(agentCtx, resolvedId)
+        const fingerprint = typeof presets.compositionFingerprint === 'function'
+          ? await presets.compositionFingerprint(agentCtx)
+          : undefined
+        if (fingerprint === undefined) return
+        const existing = this.ctx.sessionProjections.stateOf(
+          agent.session,
+          'agentCompositionFingerprint',
+        )
+        if (existing !== null && existing !== undefined && existing !== fingerprint) {
+          // A workspace reconnect may reuse a persisted blank Session after a
+          // host rebuild. Its selection event belongs to the empty draft, not
+          // to a conversation history, so it is safe to refresh the
+          // composition before the first turn. Once a turn exists the
+          // composition remains immutable and the conflict is intentional.
+          if (isBlankAgentSession(agent.session)) {
+            agent.session.append('agent-preset/selected', {
+              agentPreset: resolvedId,
+              agentCompositionFingerprint: fingerprint,
+            })
+            return
+          }
+          throw new RemoteError(
+            'agent-preset/composition-conflict',
+            `session "${agent.session.id}" records composition ${existing}, not ${fingerprint}`,
+            {
+              sessionId: agent.session.id,
+              agentPreset: resolvedId,
+              requestedFingerprint: fingerprint,
+              existingFingerprint: existing,
+            },
+          )
+        }
+        if (existing === fingerprint) return
+        agent.session.append('agent-preset/selected', {
+          agentPreset: resolvedId,
+          agentCompositionFingerprint: fingerprint,
+        })
       },
     }
   }
@@ -523,6 +566,11 @@ export class ApiSessionAgentController {
     if (requested === undefined || requested === existing) return
     throw new ApiSessionPresetConflict(sessionId, requested, existing)
   }
+}
+
+/** Whether a Session has not yet recorded its first conversational turn. */
+function isBlankAgentSession(session: Pick<Session, 'snapshotEvents'>): boolean {
+  return !session.snapshotEvents().some(event => event.type === 'turn/start')
 }
 
 function agentModelSelection(selection: ModelSelection): AgentModelSelection {

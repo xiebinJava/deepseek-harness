@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -807,7 +808,7 @@ describe('editing a composition file', () => {
       standing: Map<string, Promise<{
         key: unknown
         scope: unknown
-        stamp: { mtimeMs: number; size: number }
+        stamp: { mtimeMs: number; size: number; fingerprint: string }
       }>>
       ensureStanding(current: typeof preset): Promise<unknown>
     }
@@ -815,7 +816,11 @@ describe('editing a composition file', () => {
     const stale = await stalePromise
     await writeFile(path, rowFor('afterwards'))
     const { mtimeMs, size } = await stat(path)
-    const newer = { ...stale, stamp: { mtimeMs, size } }
+    const fingerprint = createHash('sha256')
+      .update('dsh-agent-composition\0')
+      .update(await readFile(path))
+      .digest('hex')
+    const newer = { ...stale, stamp: { mtimeMs, size, fingerprint: `sha256:${fingerprint}` } }
     const newerPromise = Promise.resolve(newer)
 
     // `await pending` yields before the guarded delete, letting the winning

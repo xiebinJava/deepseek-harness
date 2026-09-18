@@ -89,7 +89,7 @@ describe('the shipped preset root', () => {
     const ctx = await roster({ includeUserRoot: false })
 
     const listed = await ctx.agentPresets.list()
-    expect(listed.map(preset => preset.id).sort()).toEqual(['cordis', 'minimal', 'ptc', 'standard'])
+    expect(listed.map(preset => preset.id).sort()).toEqual(['cordis', 'minimal', 'pms-project-assistant', 'ptc', 'standard'])
     expect(listed.every(preset => preset.trust === 'system')).toBe(true)
     // Not `broken === undefined`: health asks whether each row's package is
     // installed above the base, and the shipped rows name packages the
@@ -98,6 +98,36 @@ describe('the shipped preset root', () => {
     // malformed would be a different one, and this asserts there is none.
     expect(listed.map(preset => preset.broken)
       .filter(reason => reason !== undefined && !reason.includes('cannot be resolved'))).toEqual([])
+  })
+
+  it('publishes the PMS Agent metadata and keeps PMS registration inside its composition', async () => {
+    const ctx = await roster({ includeUserRoot: false })
+    const pms = (await ctx.agentPresets.list()).find(preset => preset.id === 'pms-project-assistant')
+
+    expect(pms).toMatchObject({
+      id: 'pms-project-assistant',
+      trust: 'system',
+      name: 'PMS 项目助手',
+      workspaceTypes: ['pms'],
+      capabilities: ['pms:query', 'pms:command:preview', 'pms:command:execute'],
+    })
+    expect(findEntry(await shippedEntries('pms-project-assistant'), 'pms')).toMatchObject({
+      name: '@deepseek-ai/dsh-pms',
+      config: { mode: 'agent' },
+    })
+  })
+
+  it('ships a concise and evidence-first PMS assistant prompt', async () => {
+    const persona = findEntry(await shippedEntries('pms-project-assistant'), 'persona')
+    const prefix = (persona?.config as { prefix?: unknown } | undefined)?.prefix
+
+    expect(prefix).toEqual(expect.any(String))
+    expect(prefix).toContain('回答规范')
+    expect(prefix).toContain('结论先行')
+    expect(prefix).toContain('只依据本次工具返回的数据')
+    expect(prefix).toContain('不得猜测')
+    expect(prefix).toContain('必须先生成预览')
+    expect(prefix).toContain('明确确认同一份预览')
   })
 
   it('prepends the shipped root before configured roots and the derived user root', async () => {

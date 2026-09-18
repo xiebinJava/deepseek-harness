@@ -6,6 +6,9 @@
     - img
 - img
 - text: Minimal mode
+- button "打开 PMS 业务工作区":
+  - img
+  - text: PMS
 - button "More actions":
   - img
 - button "Open right sidebar":

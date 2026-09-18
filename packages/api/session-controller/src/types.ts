@@ -200,6 +200,12 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
       readonly requestedPreset: string
       readonly existingPreset?: string
     }
+    'agent-preset/composition-conflict': {
+      readonly sessionId: SessionId
+      readonly agentPreset: string
+      readonly requestedFingerprint: string
+      readonly existingFingerprint: string
+    }
     'session/attachment-invalid': { readonly reason: string }
     'session/queue-item-not-found': { readonly itemId: MessageId }
     'session/steer-unavailable': { readonly itemId: MessageId }
@@ -318,6 +324,10 @@ export interface SessionPromptRequest {
   /** At least one non-whitespace text part or attachment. */
   readonly content: readonly PromptContentPart[]
   readonly clientTimeZone?: string
+  /** Client projection identity; the Host remains authoritative and validates it. */
+  readonly agentPreset?: string
+  /** Exact Agent composition generation the client rendered. */
+  readonly agentCompositionFingerprint?: string
 }
 
 /** Receipt after one prompt enters the target Agent inbox. */

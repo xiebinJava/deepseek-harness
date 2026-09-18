@@ -1,0 +1,21 @@
+.root {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.frame {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--dsw-alias-bg-layer-1);
+}

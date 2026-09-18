@@ -12,9 +12,14 @@ export type AgentPresetSettingsKey =
   | 'displayName' | 'displayNamePlaceholder'
   | 'inUse' | 'selectionOffDefault' | 'noDescription' | 'builtInGroup' | 'customGroup'
   | 'brokenBadge' | 'brokenNoCopy' | 'switchRefused'
+  | 'autoSelect' | 'pmsProjectAssistant' | 'currentAgent' | 'sessionLocked' | 'agentUnavailable'
   | 'composition' | 'cancel' | 'close' | 'retry'
   | 'copyTitle' | 'copyIntro' | 'create' | 'creating' | 'creatorDraft'
   | 'openLocation' | 'showLocation' | 'revealedPathLabel'
+  | 'editAgent' | 'editorDescription' | 'identityPrompt' | 'behaviorPrompt'
+  | 'skills' | 'plugins' | 'workspaces' | 'noBindings' | 'saveDraft' | 'savingDraft'
+  | 'publishDraft' | 'publishingDraft' | 'testDraft' | 'testingDraft' | 'allowedTools' | 'blockedTools'
+  | 'draftVersion' | 'draftRevision'
   | 'idRequired' | 'idInvalid' | 'idTaken'
   | 'deleteTitle' | 'deleteDescription' | 'deleteConfirm' | 'deleting'
   | 'showPicker' | 'showPickerBeta' | 'showPickerDescription'
@@ -60,6 +65,11 @@ export const en: Record<AgentPresetSettingsKey, string> = {
   brokenBadge: 'Failed to load',
   brokenNoCopy: 'A preset that failed to load cannot be duplicated',
   switchRefused: 'Could not switch to {name}: {reason}',
+  autoSelect: 'Auto select',
+  pmsProjectAssistant: 'PMS project assistant',
+  currentAgent: 'Current Agent',
+  sessionLocked: 'The Agent is fixed after the session starts',
+  agentUnavailable: 'Agent unavailable: {id}',
   copyOf: 'Copied from',
   composition: 'Composition (agent.cordis.yml)',
   cancel: 'Cancel',
@@ -75,6 +85,24 @@ export const en: Record<AgentPresetSettingsKey, string> = {
   openLocation: 'Open folder',
   showLocation: 'Show location',
   revealedPathLabel: 'Preset files:',
+  editAgent: 'Edit Agent',
+  editorDescription: 'Edit the identity, working method, registered Skills, plugins, and workspace bindings. Save first, then publish a new version.',
+  identityPrompt: 'Who I am',
+  behaviorPrompt: 'How I work',
+  skills: 'Skills',
+  plugins: 'Plugins',
+  workspaces: 'Workspace bindings',
+  noBindings: 'No registered options.',
+  saveDraft: 'Save draft',
+  savingDraft: 'Saving…',
+  publishDraft: 'Publish version',
+  publishingDraft: 'Publishing…',
+  testDraft: 'Preview draft',
+  testingDraft: 'Previewing…',
+  allowedTools: 'Read-only tools in preview',
+  blockedTools: 'Blocked tools in preview',
+  draftVersion: 'Published version',
+  draftRevision: 'Draft revision',
   idRequired: 'Give the preset an identifier.',
   idInvalid: 'Use lowercase letters, digits, and hyphens, starting with a letter or digit.',
   idTaken: 'A preset with this identifier already exists.',
@@ -125,6 +153,11 @@ export const zh: Record<AgentPresetSettingsKey, string> = {
   brokenBadge: '加载失败',
   brokenNoCopy: '预设加载失败，不能复制',
   switchRefused: '无法切换到「{name}」：{reason}',
+  autoSelect: '自动选择',
+  pmsProjectAssistant: 'PMS 项目助手',
+  currentAgent: '当前 Agent',
+  sessionLocked: '会话开始后 Agent 已锁定',
+  agentUnavailable: '当前 Agent 不可用：{id}',
   copyOf: '复制自',
   composition: '组装（agent.cordis.yml）',
   cancel: '取消',
@@ -138,6 +171,24 @@ export const zh: Record<AgentPresetSettingsKey, string> = {
   openLocation: '打开目录',
   showLocation: '查看路径',
   revealedPathLabel: '预设文件：',
+  editAgent: '编辑 Agent',
+  editorDescription: '编辑 Agent 的身份、工作方式、已注册 Skill、插件和工作区绑定。先保存草稿，再发布新版本。',
+  identityPrompt: '我是谁',
+  behaviorPrompt: '我怎么工作',
+  skills: 'Skill',
+  plugins: '插件',
+  workspaces: '工作区绑定',
+  noBindings: '暂无已注册选项。',
+  saveDraft: '保存草稿',
+  savingDraft: '正在保存…',
+  publishDraft: '发布版本',
+  publishingDraft: '正在发布…',
+  testDraft: '预览草稿',
+  testingDraft: '正在预览…',
+  allowedTools: '预览中可用的只读工具',
+  blockedTools: '预览中明确阻断的工具',
+  draftVersion: '已发布版本',
+  draftRevision: '草稿版本号',
   idRequired: '请填写标识符。',
   idInvalid: '只能使用小写字母、数字与连字符，且以字母或数字开头。',
   idTaken: '该标识符已被占用。',

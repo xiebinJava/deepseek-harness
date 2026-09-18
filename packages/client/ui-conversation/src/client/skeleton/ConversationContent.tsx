@@ -123,7 +123,9 @@ export function ConversationContent(props: ConversationContentProps) {
         },
         onClose: () => { setPickerOpen(false) },
       })}
-      {renderSlot('conversation.hero.agentPreset', {})}
+      {/* A session-aware composer owns the selector once the conversation
+          exists; keep this only for the true cold-start with no session yet. */}
+      {sessionId === undefined ? renderSlot('conversation.hero.agentPreset', {}) : null}
     </div>
   )
 

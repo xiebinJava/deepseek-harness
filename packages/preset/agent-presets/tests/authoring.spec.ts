@@ -17,11 +17,27 @@ import Include from '@deepseek-ai/cordis-plugin-include'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import AgentPresets, {
-  COMPOSITION_FILE, copyComposition, METADATA_FILE, type Config,
+  COMPOSITION_FILE, copyComposition, METADATA_FILE, type AgentPresetDraftInput, type Config,
 } from '@deepseek-ai/dsh-agent-presets'
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures')
 const VALID = '- id: tool-alpha\n  name: ../../plugins/contribute.js\n  config:\n    tool: alpha\n'
+const EDITABLE = `- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    prefix: 原始身份
+    suffix: 原始行为
+- id: pms
+  name: '@deepseek-ai/dsh-pms'
+  config:
+    mode: agent
+`
+const PERSONA_ONLY = `- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    prefix: 原始身份
+    suffix: 原始行为
+`
 
 /** Every temp root created by this file, removed after each test. */
 const roots: string[] = []
@@ -275,6 +291,91 @@ describe('a user root that does not exist yet', () => {
 
     expect(await readFile(join(absent, 'mine', COMPOSITION_FILE), 'utf8'))
       .toBe(await fresh.agentPresets.read('standard'))
+  })
+})
+
+describe('drafting and publishing a user-owned Agent', () => {
+  const input = (overrides: Partial<AgentPresetDraftInput> = {}): AgentPresetDraftInput => ({
+    identityPrompt: '你是 PMS 项目助手。',
+    behaviorPrompt: '先查询，再预览，最后等待确认。',
+    selectedSkills: [],
+    selectedPlugins: ['pms'],
+    workspaceBindings: ['pms'],
+    ...overrides,
+  })
+
+  it('saves drafts with an optimistic revision and rejects stale writers', async () => {
+    await seedPreset(userRoot, 'mine', { composition: EDITABLE })
+    const current = await ctx.agentPresets.readDraft('mine')
+
+    const saved = await ctx.agentPresets.saveDraft('mine', current.revision, input())
+
+    expect(saved.revision).not.toBe(current.revision)
+    expect(saved.identityPrompt).toBe('你是 PMS 项目助手。')
+    await expect(ctx.agentPresets.saveDraft('mine', current.revision, input({ identityPrompt: '过期写入' })))
+      .rejects.toThrow(/stale|conflict/i)
+  })
+
+  it('publishes the validated prompts and creates a numbered history entry', async () => {
+    await seedPreset(userRoot, 'mine', { composition: EDITABLE })
+    const current = await ctx.agentPresets.readDraft('mine')
+    const saved = await ctx.agentPresets.saveDraft('mine', current.revision, input())
+
+    const published = await ctx.agentPresets.publishDraft('mine', saved.revision)
+
+    expect(published.version).toBe(1)
+    expect(published.fingerprint).toMatch(/^[a-f0-9]{64}$/)
+    expect((await readFile(join(userRoot, 'mine', COMPOSITION_FILE), 'utf8')))
+      .toContain('你是 PMS 项目助手。')
+    expect(existsSync(join(userRoot, 'mine', 'versions', 'v1', COMPOSITION_FILE))).toBe(true)
+  })
+
+  it('adds a registered plugin by catalog id instead of accepting a module path', async () => {
+    await seedPreset(userRoot, 'mine', { composition: PERSONA_ONLY })
+    const current = await ctx.agentPresets.readDraft('mine')
+    const saved = await ctx.agentPresets.saveDraft('mine', current.revision, input({ selectedPlugins: ['pms'] }))
+
+    await ctx.agentPresets.publishDraft('mine', saved.revision)
+
+    const published = await readFile(join(userRoot, 'mine', COMPOSITION_FILE), 'utf8')
+    expect(published).toContain("name: '@deepseek-ai/dsh-pms'")
+    expect(published).toContain('mode: agent')
+  })
+
+  it('previews the selected tool catalog without mounting or executing it', async () => {
+    await seedPreset(userRoot, 'mine', { composition: EDITABLE })
+
+    const preview = await ctx.agentPresets.testDraft('mine', input())
+
+    expect(preview).toMatchObject({
+      agentPreset: 'mine',
+      version: 0,
+      availableTools: ['pms_project_list', 'pms_project_get', 'pms_task_list', 'pms_command_preview'],
+      blockedTools: ['pms_command_execute'],
+    })
+    expect(preview.revision).toMatch(/^[a-f0-9]{64}$/)
+    expect(preview.message).toContain('未执行')
+    expect(existsSync(join(userRoot, 'mine', 'agent.draft.yml'))).toBe(false)
+  })
+
+  it('rejects an unregistered Skill or plugin binding before it reaches disk', async () => {
+    await seedPreset(userRoot, 'mine', { composition: EDITABLE })
+    const current = await ctx.agentPresets.readDraft('mine')
+
+    await expect(ctx.agentPresets.saveDraft(
+      'mine', current.revision, input({ selectedPlugins: ['../../escape'] }),
+    )).rejects.toThrow(/registered|binding/i)
+    await expect(ctx.agentPresets.saveDraft(
+      'mine', current.revision, input({ selectedSkills: ['../../escape'] }),
+    )).rejects.toThrow(/registered|binding/i)
+    expect(existsSync(join(userRoot, 'mine', 'agent.draft.yml'))).toBe(false)
+  })
+
+  it('keeps shipped presets read-only for draft writes', async () => {
+    const current = await ctx.agentPresets.readDraft('standard')
+
+    await expect(ctx.agentPresets.saveDraft('standard', current.revision, input()))
+      .rejects.toThrow(/cannot be written|read-only/i)
   })
 })
 

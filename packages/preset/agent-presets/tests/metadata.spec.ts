@@ -80,6 +80,31 @@ describe('reading display metadata', () => {
     expect(await readPresetMetadata(dir)).toEqual({ name: '标准模式', order: 1 })
   })
 
+  it('reads workspace targeting and capability labels while ignoring malformed entries', async () => {
+    const dir = await presetDir([
+      'workspaceTypes:',
+      '  - pms',
+      '  - " pms "',
+      '  - "  "',
+      '  - 42',
+      'capabilities:',
+      '  - pms:query',
+      '  - " pms:query "',
+      '  - pms:command:preview',
+      '  - null',
+    ].join('\n') + '\n')
+
+    expect(await readPresetMetadata(dir)).toEqual({
+      workspaceTypes: ['pms'],
+      capabilities: ['pms:query', 'pms:command:preview'],
+    })
+  })
+
+  it('reads an explicit disabled state', async () => {
+    expect(await readPresetMetadata(await presetDir('name: 暂停助手\nenabled: false\n')))
+      .toEqual({ name: '暂停助手', enabled: false })
+  })
+
   it('ignores an order that is not a finite number', async () => {
     expect(await readPresetMetadata(await presetDir('order: first\n'))).toEqual({})
     expect(await readPresetMetadata(await presetDir('order: .inf\n'))).toEqual({})
@@ -104,6 +129,26 @@ describe('rendering display metadata', () => {
 
   it('stores a declared order', () => {
     expect(renderPresetMetadata({ name: '标准模式', order: 1 })).toBe('name: 标准模式\norder: 1\n')
+  })
+
+  it('renders workspace targeting and capability labels', async () => {
+    const rendered = renderPresetMetadata({
+      name: 'PMS 项目助手',
+      workspaceTypes: ['pms'],
+      capabilities: ['pms:query', 'pms:command:preview'],
+    })
+    const dir = await presetDir(rendered)
+
+    expect(await readPresetMetadata(dir)).toEqual({
+      name: 'PMS 项目助手',
+      workspaceTypes: ['pms'],
+      capabilities: ['pms:query', 'pms:command:preview'],
+    })
+  })
+
+  it('renders an explicit disabled state', async () => {
+    expect(renderPresetMetadata({ name: '暂停助手', enabled: false }))
+      .toBe('name: 暂停助手\nenabled: false\n')
   })
 
   it('omits an absent field rather than writing it blank', () => {

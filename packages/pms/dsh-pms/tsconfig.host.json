@@ -1,0 +1,31 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.host.tsbuildinfo"
+  },
+  "files": [
+    "src/index.ts",
+    "src/config.ts",
+    "src/types.ts",
+    "src/remote.ts",
+    "src/auth/pms-auth-store.ts",
+    "src/client/PmsIntegrationClient.ts",
+    "src/context/pms-context-store.ts",
+    "src/context/pms-session-tags.ts",
+    "src/tools/project-list.ts",
+    "src/tools/project-detail.ts",
+    "src/tools/task-list.ts",
+    "src/tools/query.ts",
+    "src/tools/command.ts"
+  ],
+  "references": [
+    { "path": "../../../vendor/cordis" },
+    { "path": "../../../vendor/schemastery" },
+    { "path": "../../core/session" },
+    { "path": "../../core/system-prompt" },
+    { "path": "../../core/tools" },
+    { "path": "../../typert/protocol" }
+  ]
+}

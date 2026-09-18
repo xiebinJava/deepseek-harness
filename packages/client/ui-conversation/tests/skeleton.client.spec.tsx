@@ -178,6 +178,7 @@ function mount(
   const stop = vi.fn()
   const open = vi.fn()
   const slotCalls: string[] = []
+  const composerSlotCalls: string[] = []
   const lineageOwners: ConversationHeaderLineageOwnerProps[] = []
   const viewTabs = options.viewTabs ?? [
     { id: 'chat', label: 'Chat' },
@@ -285,6 +286,7 @@ function mount(
           stop={stop}
           t={t}
           renderSlot={((key: string, seatOwner: object) => {
+            composerSlotCalls.push(key)
             // The bar's own seats: recorded so a case can assert what share
             // each tool-row control received.
             seatOwners.push({ key, owner: seatOwner })
@@ -363,7 +365,8 @@ function mount(
   }
   const view = render(<ConversationMainPanel {...props} />)
   return {
-    view, store, wiring, sink, retargetWorkspace, session, conversation, slotCalls, lineageOwners, seatOwners, open,
+    view, store, wiring, sink, retargetWorkspace, session, conversation, slotCalls, composerSlotCalls,
+    lineageOwners, seatOwners, open,
     pickerOwner: () => pickerOwner,
     rerender: () => { view.rerender(<ConversationMainPanel {...props} />) },
   }
@@ -656,9 +659,11 @@ describe('ConversationRoot resident composer', () => {
     const chip = b.view.getByRole('button', { name: '选择工作区' })
     expect((chip as HTMLButtonElement).disabled).toBe(false)
     expect(b.slotCalls).toContain('conversation.hero.workspace')
-    // The agent-preset chip sits in the same row, for the same reason: both
-    // choices are only open before the first message.
-    expect(b.slotCalls).toContain('conversation.hero.agentPreset')
+    // With a blank Session the Agent selector now lives in the composer
+    // footer, next to the model selector. The hero slot is reserved for the
+    // true cold start before a Session exists.
+    expect(b.composerSlotCalls).toContain('conversation.input.right')
+    expect(b.slotCalls).not.toContain('conversation.hero.agentPreset')
   })
 
   it('prompt failure renders the promptError strip (ordinary failure, no transaction UI)', () => {

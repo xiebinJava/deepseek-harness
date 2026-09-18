@@ -1,0 +1,14 @@
+# Optional PMS bundle. Install this package into a DSH profile to enable the
+# PMS context/auth bridge; PMS tools are contributed by the PMS Agent preset.
+- insert:
+    - id: pms
+      name: '@deepseek-ai/dsh-pms'
+      config:
+        # The profile owns the browser context/auth bridge. PMS tools are
+        # enabled only by the PMS Agent preset in agent scope.
+        mode: host
+        baseUrl: http://127.0.0.1:8080
+        apiPrefix: /api
+        # This is a server-to-server secret. It is read by the DSH Host only
+        # and is never sent to the embedded PMS browser workspace.
+        serviceKey: !!js process.env.PMS_DSH_SERVICE_KEY ?? ''

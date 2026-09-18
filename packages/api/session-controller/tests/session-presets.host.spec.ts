@@ -6,11 +6,15 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentFactory } from '@deepseek-ai/dsh-agent'
-import { agentPresetProjectionDefinition } from '@deepseek-ai/dsh-agent-presets'
+import {
+  agentCompositionFingerprintProjectionDefinition,
+  agentPresetProjectionDefinition,
+} from '@deepseek-ai/dsh-agent-presets'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { afterEach, describe, expect, it } from 'vitest'
+import { ApiSessionAgentController } from '../src/agent.ts'
 import { createSessionTestRemote } from './test-remote.ts'
 
 /** Booted contexts and their temp roots, torn down after each test. */
@@ -45,6 +49,7 @@ function roster(ids: readonly string[]): unknown {
       return Promise.resolve(presetOf(wanted))
     },
     mount: (_ctx: Context, id?: string) => Promise.resolve(presetOf(id ?? ids[0] ?? '')),
+    compositionFingerprint: (_ctx: Context) => Promise.resolve('sha256:test-composition'),
   }
 }
 
@@ -80,7 +85,10 @@ async function harness(presets?: readonly string[]) {
     defaultModelSelection: () => ({ provider: 'test', model: 'test-model' }),
     cwd,
   })
-  if (presets !== undefined) ctx.sessionProjections.register(agentPresetProjectionDefinition)
+  if (presets !== undefined) {
+    ctx.sessionProjections.register(agentPresetProjectionDefinition)
+    ctx.sessionProjections.register(agentCompositionFingerprintProjectionDefinition)
+  }
   return { ctx, remote }
 }
 
@@ -92,6 +100,10 @@ describe('session.create Agent preset identity', () => {
 
     expect(created.ok).toBe(true)
     expect(ctx.sessions.get(SessionId('s1'))?.header.agentPreset).toBe('minimal')
+    expect(ctx.sessions.get(SessionId('s1'))?.snapshotEvents()).toContainEqual(expect.objectContaining({
+      type: 'agent-preset/selected',
+      data: { agentPreset: 'minimal', agentCompositionFingerprint: 'sha256:test-composition' },
+    }))
   })
 
   it('records the roster default when the caller names no preset', async () => {
@@ -179,5 +191,44 @@ describe('session.create Agent preset identity', () => {
     if (response.ok) throw new Error('unreachable')
     expect('existingPreset' in response.error.details).toBe(false)
     expect(response.error.message).toContain('records no agent preset')
+  })
+
+  it('refreshes a stale composition on a blank session after a host rebuild', async () => {
+    const { ctx } = await harness(['standard'])
+    const session = ctx.sessions.create(SessionId('s8'), { meta: { cwd: '/workspace' } })
+    session.append('agent-preset/selected', {
+      agentPreset: 'standard',
+      agentCompositionFingerprint: 'sha256:previous-build',
+    })
+    const agent = stubAgent(session)
+    ;(agent as { ctx?: Context }).ctx = ctx
+    const controller = new ApiSessionAgentController(ctx)
+    const composition = await controller.composeAgent('standard')
+
+    await expect(composition.setup(ctx, agent)).resolves.toBeUndefined()
+    expect(ctx.sessionProjections.stateOf(session, 'agentCompositionFingerprint'))
+      .toBe('sha256:test-composition')
+    expect(session.snapshotEvents()).toContainEqual(expect.objectContaining({
+      type: 'agent-preset/selected',
+      data: { agentPreset: 'standard', agentCompositionFingerprint: 'sha256:test-composition' },
+    }))
+  })
+
+  it('keeps composition immutable once a session has a turn', async () => {
+    const { ctx } = await harness(['standard'])
+    const session = ctx.sessions.create(SessionId('s9'), { meta: { cwd: '/workspace' } })
+    session.append('agent-preset/selected', {
+      agentPreset: 'standard',
+      agentCompositionFingerprint: 'sha256:previous-build',
+    })
+    session.append('turn/start', { turn: 1 })
+    const agent = stubAgent(session)
+    ;(agent as { ctx?: Context }).ctx = ctx
+    const controller = new ApiSessionAgentController(ctx)
+    const composition = await controller.composeAgent('standard')
+
+    await expect(composition.setup(ctx, agent)).rejects.toMatchObject({
+      code: 'agent-preset/composition-conflict',
+    })
   })
 })

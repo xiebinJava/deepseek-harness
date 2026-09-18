@@ -1,0 +1,9 @@
+name: PMS 项目助手
+description: 专注 PMS 项目、节点、任务和成员操作的业务 Agent。
+order: 1
+workspaceTypes:
+  - pms
+capabilities:
+  - pms:query
+  - pms:command:preview
+  - pms:command:execute

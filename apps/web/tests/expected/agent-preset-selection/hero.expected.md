@@ -1,8 +1,17 @@
+- text: Into the Unknown Preview
 - button "Choose workspace":
   - img
   - text: workspace
   - img
-- button "Standard mode":
+- textbox "Describe what you want to build, / commands, @ files or sessions"
+- button "Add files or run commands":
+  - img
+- 'button "Access mode, current: Workspace Write"': Workspace Write
+- button "Current Agent：Standard mode":
   - img
   - text: Standard mode
   - img
+- button "Select model, current DeepSeek-V4-Flash":
+  - text: DeepSeek-V4-Flash
+  - img
+- button "Send message" [disabled]

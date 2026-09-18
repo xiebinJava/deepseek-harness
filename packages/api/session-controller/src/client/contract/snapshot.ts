@@ -68,6 +68,10 @@ export interface PromptError {
 /** Immutable Session lifecycle and control snapshot. */
 export interface SessionSnapshot {
   readonly sessionId: SessionId
+  /** Persisted Agent preset currently displayed for this Session. */
+  readonly agentPreset?: string
+  /** Persisted exact Agent composition generation currently displayed. */
+  readonly agentCompositionFingerprint?: string
   /** Local prompt-submission echoes not yet observed as durable events or queue occurrences. */
   readonly pendingSubmissions: readonly PendingSubmission[]
   readonly running: boolean

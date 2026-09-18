@@ -69,6 +69,41 @@ export interface AgentPresetOption {
 /** One roster entry exactly as the host reports it. */
 export type RosterPreset = AgentPresetRoster['presets'][number]
 
+/** Why the current Agent preset was selected. */
+export type AgentPresetSelectionSource = 'user' | 'workspace-default' | 'auto' | 'fallback'
+
+/** One deterministic selection decision for the next session. */
+export interface AgentPresetSelection {
+  id: string
+  source: AgentPresetSelectionSource
+}
+
+/**
+ * Resolve the next-session preset without making the UI guess from labels.
+ *
+ * The order is intentional: a person pick wins, then a preset targeted at the
+ * active business workspace, then the Host-effective default, then the first
+ * healthy row as a deterministic generic fallback.
+ */
+export function resolvePresetSelection(
+  presets: readonly RosterPreset[],
+  workspaceType?: string,
+  explicit?: string,
+): AgentPresetSelection {
+  const healthy = presets.filter(preset => preset.broken === undefined)
+  if (explicit !== undefined && healthy.some(preset => preset.id === explicit)) {
+    return { id: explicit, source: 'user' }
+  }
+  const type = workspaceType?.trim()
+  if (type !== undefined && type !== '') {
+    const workspacePreset = healthy.find(preset => preset.workspaceTypes?.includes(type))
+    if (workspacePreset !== undefined) return { id: workspacePreset.id, source: 'workspace-default' }
+  }
+  const automatic = healthy.find(preset => preset.isDefault)
+  if (automatic !== undefined) return { id: automatic.id, source: 'auto' }
+  return { id: healthy[0]?.id ?? '', source: 'fallback' }
+}
+
 /** The roster, or the message to show in its place. */
 export type RosterRead = { ok: true; value: AgentPresetRoster } | { ok: false; error: string }
 
@@ -79,14 +114,26 @@ const EMPTY_ROSTER: AgentPresetRoster = { presets: [], authorable: false, modeSe
  * @param ctx - the browser plugin context carrying the Remote namespaces.
  * @returns the roster, or the message to show in its place.
  */
-export async function readRoster(ctx: ClientContext): Promise<RosterRead> {
-  const result = await ctx.remote.agentPresets.list()
-  if (result.ok) return { ok: true, value: result.value }
-  // Agent presets are optional: without that service every session uses the
-  // Host composition, so callers receive the same empty roster as a mounted
-  // service with no configured roots.
-  if (result.error.code === 'gateway/invocation-unavailable') return { ok: true, value: EMPTY_ROSTER }
-  return { ok: false, error: result.error.message }
+export async function readRoster(ctx: ClientContext, workspaceType?: string): Promise<RosterRead> {
+  try {
+    // The Typert Remote contract keeps this optional filter as one positional
+    // argument. Passing `undefined` explicitly is required: omitting it makes
+    // the generated client call arity 0, while the Host endpoint expects 1,
+    // which leaves the settings section stuck in its loading shell.
+    const result = await ctx.remote.agentPresets.list(workspaceType)
+    if (result.ok) return { ok: true, value: result.value }
+    // Agent presets are optional: without that service every session uses the
+    // Host composition, so callers receive the same empty roster as a mounted
+    // service with no configured roots.
+    if (result.error.code === 'gateway/invocation-unavailable') return { ok: true, value: EMPTY_ROSTER }
+    return { ok: false, error: result.error.message }
+  } catch (error: unknown) {
+    // A missing or stale Remote namespace can throw before it returns the
+    // protocol-level invocation-unavailable error. Convert that transport
+    // failure into the same visible error state instead of leaving every
+    // roster-backed surface stuck in its loading shell forever.
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 /**
@@ -103,11 +150,12 @@ export async function readRoster(ctx: ClientContext): Promise<RosterRead> {
 export async function beginRosterRead<S extends { status: string; error: string | null }>(
   ctx: ClientContext,
   store: SnapshotStore<S>,
+  workspaceType?: string,
 ): Promise<AgentPresetRoster | undefined> {
   const before = store.getSnapshot()
   if (before.status === 'loading') return undefined
   store.set({ ...before, status: 'loading', error: null })
-  const roster = await readRoster(ctx)
+  const roster = await readRoster(ctx, workspaceType)
   if (roster.ok) return roster.value
   store.set({ ...store.getSnapshot(), status: 'error', error: roster.error })
   return undefined
@@ -174,8 +222,8 @@ export class AgentPresetSettingsController {
    * surfaces report `unavailable` and render nothing.
    * @returns once the snapshot reflects the host.
    */
-  async load(): Promise<void> {
-    const roster = await beginRosterRead(this.ctx, this.store)
+  async load(workspaceType?: string): Promise<void> {
+    const roster = await beginRosterRead(this.ctx, this.store, workspaceType)
     if (roster === undefined) return
     const { presets } = roster
     if (presets.length === 0) {

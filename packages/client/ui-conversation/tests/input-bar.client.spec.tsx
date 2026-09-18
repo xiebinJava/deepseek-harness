@@ -1597,6 +1597,17 @@ describe('strips and variants', () => {
     expect(view.getByTestId('ri')).toBeTruthy()
     expect(view.getByTestId('foot')).toBeTruthy()
   })
+
+  it('keeps the Agent selector immediately before the model selector in the footer', () => {
+    const { view } = bench({
+      rightItems: <button type="button" data-testid="agent-seat">PMS 项目助手</button>,
+      modelEntry: <button type="button" data-testid="model-seat">模型</button>,
+    })
+
+    const agent = view.getByTestId('agent-seat')
+    const model = view.getByTestId('model-seat')
+    expect(agent.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+  })
 })
 
 describe('command launcher chrome and control seats', () => {

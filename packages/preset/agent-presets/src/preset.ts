@@ -31,6 +31,12 @@ export interface AgentPreset {
   readonly description?: string
   /** Declared position within its group; absent sorts after those that declare one. */
   readonly order?: number
+  /** Workspace types this preset is intended for; absent means generic. */
+  readonly workspaceTypes?: readonly string[]
+  /** Capability labels published by the preset. */
+  readonly capabilities?: readonly string[]
+  /** Whether the published preset can be selected for new sessions. */
+  readonly enabled?: boolean
   /**
    * Why this preset cannot compose a session, absent when it can. A broken
    * preset stays on the roster — hiding it would leave its directory blocking

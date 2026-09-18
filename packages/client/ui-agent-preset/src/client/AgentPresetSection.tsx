@@ -3,17 +3,18 @@
  * only way a preset is created, and a read-only viewer over the shipped
  * compositions.
  *
- * The browser edits no composition text — a shipped preset opens read-only to
- * be READ (it is the known-good composition a copy starts from), and a custom
- * preset is edited in its own files, which is what the location action leads
- * to. Deleting a preset leaves running sessions alone: a composition is
+ * The browser edits no shipped composition text — system presets remain
+ * read-only — while a user-owned preset opens the structured editor for its
+ * identity, behavior, bindings, and publish workflow. Advanced composition
+ * files remain available through the location action. Deleting a preset leaves
+ * running sessions alone: a composition is
  * mounted once at session creation and nothing re-reads the file.
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
-  Button, IconBrowseOutline16, IconCopyOutline16, IconFolderOpenOutline16,
+  Button, IconBrowseOutline16, IconCopyOutline16, IconEditOutline16, IconFolderOpenOutline16,
   IconPlusOutline16, IconTrashOutline16, Modal, Switch, Tag, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
@@ -34,6 +35,22 @@ export interface AgentPresetSectionInjected {
   view: (id: string) => Promise<void>
   /** Close the read-only viewer. */
   closeView: () => void
+  /** Open the structured editor for a user-owned Agent. */
+  beginEdit: (id: string) => Promise<void>
+  /** Close the structured editor. */
+  closeEditor: () => void
+  /** Change one half of the Agent prompt. */
+  setEditorPrompt: (field: 'identityPrompt' | 'behaviorPrompt', value: string) => void
+  /** Toggle a registered binding in the Agent draft. */
+  setEditorBinding: (
+    field: 'selectedSkills' | 'selectedPlugins' | 'workspaceBindings', id: string, enabled: boolean,
+  ) => void
+  /** Save the editor draft. */
+  saveEditorDraft: () => Promise<void>
+  /** Preview the editor draft without executing tools. */
+  testEditorDraft: () => Promise<void>
+  /** Publish the saved editor draft. */
+  publishEditorDraft: () => Promise<void>
   /** Open the copy dialog over one preset. */
   beginCopy: (from: string) => void
   /** Close the copy dialog, discarding the draft. */
@@ -136,6 +153,124 @@ function CopyDialog({ state, t, actions }: CopyDialogProps): ReactNode {
             {message === null ? null : <p className={css.error} role="alert">{message}</p>}
           </div>
         )}
+    </Modal>
+  )
+}
+
+interface EditorDialogProps {
+  state: AgentPresetSectionState
+  t: (key: AgentPresetSettingsKey) => string
+  actions: Pick<AgentPresetSectionInjected,
+    'closeEditor' | 'setEditorPrompt' | 'setEditorBinding' | 'saveEditorDraft' | 'testEditorDraft'
+    | 'publishEditorDraft'>
+}
+
+function EditorDialog({ state, t, actions }: EditorDialogProps): ReactNode {
+  const editor = state.editor
+  const draft = editor?.draft
+  if (editor === null || draft === undefined) return null
+  const bindings = (
+    field: 'selectedSkills' | 'selectedPlugins' | 'workspaceBindings',
+    options: typeof draft.availableSkills,
+  ) => options.length === 0
+    ? <p className={css.emptyBindings}>{t('noBindings')}</p>
+    : options.map(option => (
+      <label key={option.id} className={css.bindingOption}>
+        <input
+          type="checkbox"
+          checked={draft[field].includes(option.id)}
+          disabled={editor.saving || editor.publishing}
+          onChange={(event) => { actions.setEditorBinding(field, option.id, event.target.checked) }}
+        />
+        <span>
+          <strong>{option.label}</strong>
+          {option.description === undefined ? null : <small>{option.description}</small>}
+        </span>
+      </label>
+    ))
+  return (
+    <Modal
+      open
+      onClose={() => { actions.closeEditor() }}
+      title={`${t('editAgent')} · ${editor.title}`}
+      closeLabel={t('close')}
+      description={t('editorDescription')}
+      className={css.editorDialog as string}
+      footer={(
+        <>
+          <Button variant="outline" disabled={editor.saving || editor.publishing || editor.testing} onClick={() => { actions.closeEditor() }}>
+            {t('cancel')}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={editor.saving || editor.publishing || editor.testing || !editor.dirty}
+            onClick={() => { void actions.saveEditorDraft() }}
+          >
+            {editor.saving ? t('savingDraft') : t('saveDraft')}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={editor.saving || editor.publishing || editor.testing}
+            onClick={() => { void actions.testEditorDraft() }}
+          >
+            {editor.testing ? t('testingDraft') : t('testDraft')}
+          </Button>
+          <Button
+            disabled={editor.saving || editor.publishing || editor.testing || editor.dirty}
+            onClick={() => { void actions.publishEditorDraft() }}
+          >
+            {editor.publishing ? t('publishingDraft') : t('publishDraft')}
+          </Button>
+        </>
+      )}
+    >
+      <div className={css.editorFields}>
+        <label className={css.field}>
+          <span className={css.fieldLabel}>{t('identityPrompt')}</span>
+          <textarea
+            className={css.textarea}
+            value={draft.identityPrompt}
+            disabled={editor.saving || editor.publishing}
+            onChange={(event) => { actions.setEditorPrompt('identityPrompt', event.target.value) }}
+          />
+        </label>
+        <label className={css.field}>
+          <span className={css.fieldLabel}>{t('behaviorPrompt')}</span>
+          <textarea
+            className={css.textarea}
+            value={draft.behaviorPrompt}
+            disabled={editor.saving || editor.publishing}
+            onChange={(event) => { actions.setEditorPrompt('behaviorPrompt', event.target.value) }}
+          />
+        </label>
+        <fieldset className={css.bindingGroup}>
+          <legend>{t('skills')}</legend>
+          <div className={css.bindingList}>{bindings('selectedSkills', draft.availableSkills)}</div>
+        </fieldset>
+        <fieldset className={css.bindingGroup}>
+          <legend>{t('plugins')}</legend>
+          <div className={css.bindingList}>{bindings('selectedPlugins', draft.availablePlugins)}</div>
+        </fieldset>
+        <fieldset className={css.bindingGroup}>
+          <legend>{t('workspaces')}</legend>
+          <div className={css.bindingList}>{bindings('workspaceBindings', draft.availableWorkspaces)}</div>
+        </fieldset>
+        {editor.testResult === null ? null : (
+          <section className={css.testPanel} aria-label={t('testDraft')}>
+            <h3>{t('testDraft')}</h3>
+            <p>{editor.testResult.message}</p>
+            <div className={css.editorMeta}>{t('draftVersion')}: v{editor.testResult.version} · {t('draftRevision')}: {editor.testResult.revision.slice(0, 12)}</div>
+            <strong>{t('allowedTools')}</strong>
+            {editor.testResult.availableTools.length === 0
+              ? <p className={css.emptyBindings}>{t('noBindings')}</p>
+              : <ul>{editor.testResult.availableTools.map(tool => <li key={tool}><code>{tool}</code></li>)}</ul>}
+            <strong>{t('blockedTools')}</strong>
+            <ul>{editor.testResult.blockedTools.map(tool => <li key={tool}><code>{tool}</code></li>)}</ul>
+          </section>
+        )}
+        {editor.error === null ? null : <p className={css.error} role="alert">{editor.error}</p>}
+        <p className={css.editorMeta}>{`${t('draftVersion')}: ${draft.version} · ${t('draftRevision')}: ${draft.revision.slice(0, 12)}`}</p>
+      </div>
     </Modal>
   )
 }
@@ -352,13 +487,11 @@ export function AgentPresetSection(props: AgentPresetSectionProps): ReactNode {
                       <code className={css.cardId}>{row.id}</code>
                     </button>
                     <div className={css.cardFoot}>
-                      {/* Shipped presets are the compositions a copy starts
-                        from, so READING one is the point; a custom preset is
-                        edited in its files instead, which the location action
-                        leads to. A broken shipped preset has no readable
-                        composition to offer, so its viewer is withheld; a
-                        broken custom one keeps the location action — the
-                        files are where it gets fixed. */}
+                      {/* System presets are read-only viewers. User-owned
+                        presets use the structured editor; the location action
+                        remains available for advanced file-level work. A
+                        broken system preset has no readable composition to
+                        offer, so its viewer is withheld. */}
                       {row.trust === 'system'
                         ? row.broken === undefined
                           ? (
@@ -374,15 +507,26 @@ export function AgentPresetSection(props: AgentPresetSectionProps): ReactNode {
                           )
                           : null
                         : (
-                          <button
-                            type="button"
-                            className={css.iconButton}
-                            data-tip={state.hasDocument ? t('openLocation') : t('showLocation')}
-                            aria-label={`${state.hasDocument ? t('openLocation') : t('showLocation')}: ${text.name}`}
-                            onClick={() => { void props.openLocation(row.id) }}
-                          >
-                            <IconFolderOpenOutline16 />
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              className={css.iconButton}
+                              data-tip={t('editAgent')}
+                              aria-label={`${t('editAgent')}: ${text.name}`}
+                              onClick={() => { void props.beginEdit(row.id) }}
+                            >
+                              <IconEditOutline16 />
+                            </button>
+                            <button
+                              type="button"
+                              className={css.iconButton}
+                              data-tip={state.hasDocument ? t('openLocation') : t('showLocation')}
+                              aria-label={`${state.hasDocument ? t('openLocation') : t('showLocation')}: ${text.name}`}
+                              onClick={() => { void props.openLocation(row.id) }}
+                            >
+                              <IconFolderOpenOutline16 />
+                            </button>
+                          </>
                         )}
                       <button
                         type="button"
@@ -453,6 +597,18 @@ export function AgentPresetSection(props: AgentPresetSectionProps): ReactNode {
           ? null
           : <pre className={css.viewerCode}>{state.view.content}</pre>}
       </Modal>
+      <EditorDialog
+        state={state}
+        t={t}
+        actions={{
+          closeEditor: props.closeEditor,
+          setEditorPrompt: props.setEditorPrompt,
+          setEditorBinding: props.setEditorBinding,
+          saveEditorDraft: props.saveEditorDraft,
+          testEditorDraft: props.testEditorDraft,
+          publishEditorDraft: props.publishEditorDraft,
+        }}
+      />
       <Modal
         open={state.pendingDelete !== null}
         onClose={() => { props.confirmDelete(null) }}

@@ -293,6 +293,7 @@
     { "path": "./packages/shell/tool-bash-persistent" },
     { "path": "./packages/shell/tool-pwsh-persistent" },
     { "path": "./packages/terminal/tool-terminal" },
+    { "path": "./packages/pms/dsh-pms/tsconfig.host.json" },
     { "path": "./packages/ptc-runtime/ptc-runtime" },
     { "path": "./packages/experimental/ptc-runtime-python" },
     { "path": "./packages/ptc-runtime/ptc-runtime-node" },

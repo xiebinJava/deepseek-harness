@@ -316,6 +316,34 @@ export class SessionCommandController {
     }
     const agent = await this.resolveAgent(request.sessionId)
     if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
+    if (request.agentPreset !== undefined || request.agentCompositionFingerprint !== undefined) {
+      const existingPreset = this.agents.presetForSession(agent.session)
+      if (request.agentPreset !== undefined && request.agentPreset !== existingPreset) {
+        throw new RemoteError(
+          'agent-preset/conflict',
+          `session "${request.sessionId}" runs agent preset "${existingPreset ?? 'none'}", not "${request.agentPreset}"`,
+          {
+            sessionId: request.sessionId,
+            requestedPreset: request.agentPreset,
+            ...(existingPreset === undefined ? {} : { existingPreset }),
+          },
+        )
+      }
+      const existingFingerprint = this.agents.compositionFingerprintForSession(agent.session)
+      if (request.agentCompositionFingerprint !== undefined
+        && request.agentCompositionFingerprint !== existingFingerprint) {
+        throw new RemoteError(
+          'agent-preset/composition-conflict',
+          `session "${request.sessionId}" does not run the requested Agent composition`,
+          {
+            sessionId: request.sessionId,
+            agentPreset: existingPreset ?? request.agentPreset ?? 'none',
+            requestedFingerprint: request.agentCompositionFingerprint,
+            existingFingerprint: existingFingerprint ?? 'none',
+          },
+        )
+      }
+    }
     const selection = this.agents.selectionFor(agent).current
     if (!routeServed(this.ctx, selection.provider)) {
       throw new RemoteError(

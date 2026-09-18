@@ -21,7 +21,8 @@
  * @module @deepseek-ai/dsh-agent-presets
  */
 
-import { stat } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFile, stat } from 'node:fs/promises'
 import { Context } from '@deepseek-ai/cordis'
 import { evaluate } from '@deepseek-ai/cordis-plugin-loader'
 import z from '@deepseek-ai/schemastery'
@@ -31,7 +32,10 @@ import { bindScopeParent, createScope, scopeOf, type Scope, type ScopeKey, type 
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-app-boot'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import type { AgentPresetDocument, AgentPresetRoster } from './types.ts'
+import type {
+  AgentPresetDocument, AgentPresetDraft, AgentPresetDraftInput, AgentPresetPublishResult, AgentPresetRoster,
+  AgentPresetTestResult,
+} from './types.ts'
 import type {} from '@deepseek-ai/dsh-session-projection'
 // Type-only: resolves the registry notification emitted after scope reparenting.
 import type {} from '@deepseek-ai/dsh-tools'
@@ -39,14 +43,20 @@ import type SettingsService from '@deepseek-ai/dsh-settings'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { discoverPresets, SHIPPED_PRESET_ROOT, USER_PRESET_DIR } from './discovery.ts'
-import { copyComposition, deleteComposition, presetExists, readComposition } from './authoring.ts'
+import {
+  copyComposition, deleteComposition, presetExists, publishDraftDocument, readComposition,
+  readDraftDocument, saveDraftDocument, testDraftDocument,
+} from './authoring.ts'
 import { livePresetMounts, mountPreset, serviceForAgent, standingMountFor } from './mount.ts'
 import {
   fileComposition, mountedCompositionRows,
   type AgentPresetComposition,
 } from './composition-inventory.ts'
 import type { AgentPreset, Config, PresetRoot } from './preset.ts'
-import { agentPresetProjectionDefinition } from './session.ts'
+import {
+  agentCompositionFingerprintProjectionDefinition,
+  agentPresetProjectionDefinition,
+} from './session.ts'
 export type * from './types.ts'
 export type {
   AgentPresetComposition, AgentPresetCompositionRow, CompositionRowEnablement,
@@ -84,8 +94,14 @@ export {
   inactiveRows, leakedServices, livePresetMounts, mountPreset, serviceForAgent, standingMountFor,
   type JoinedPresetMount, type PresetMount,
 } from './mount.ts'
-export { copyComposition, deleteComposition, readComposition, writableRoot } from './authoring.ts'
-export { agentPresetProjectionDefinition } from './session.ts'
+export {
+  DRAFT_FILE, copyComposition, deleteComposition, publishDraftDocument, readComposition,
+  readDraftDocument, saveDraftDocument, testDraftDocument, writableRoot,
+} from './authoring.ts'
+export {
+  agentCompositionFingerprintProjectionDefinition,
+  agentPresetProjectionDefinition,
+} from './session.ts'
 export type { AgentPreset, Config, PresetRoot, PresetTrust } from './preset.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -202,6 +218,7 @@ export class AgentPresets extends TypertRemoteService {
     })
 
     ctx.sessionProjections.register(agentPresetProjectionDefinition)
+    ctx.sessionProjections.register(agentCompositionFingerprintProjectionDefinition)
 
     // Advisory, not fatal: a synchronous `agent/created` listener that throws
     // VETOES publication, and this service must not, because composing an agent
@@ -229,7 +246,12 @@ export class AgentPresets extends TypertRemoteService {
     // only the stable identity needed by clients, never the live Session.
     ctx.on('session/event', (session, event) => {
       if (event.type !== 'agent-preset/selected') return
-      ctx.emit('agent-preset/selected', session.id, event.data.agentPreset)
+      ctx.emit(
+        'agent-preset/selected',
+        session.id,
+        event.data.agentPreset,
+        event.data.agentCompositionFingerprint,
+      )
     })
   }
 
@@ -274,6 +296,21 @@ export class AgentPresets extends TypertRemoteService {
   }
 
   /**
+   * Resolve the presets suitable for one workspace while retaining generic
+   * presets. Workspace metadata is a discovery hint, never an authorization
+   * grant; the host still validates the selected composition and its tools.
+   * @param workspaceType - the active workspace identifier.
+   * @returns generic presets plus presets explicitly targeting the workspace.
+   */
+  async resolveForWorkspace(workspaceType: string): Promise<AgentPreset[]> {
+    const type = workspaceType.trim()
+    if (type === '') return await this.list()
+    return (await this.list()).filter(preset =>
+      preset.workspaceTypes === undefined || preset.workspaceTypes.includes(type),
+    )
+  }
+
+  /**
    * The roster off the Host: {@link list} projected to path-free rows, with
    * the policy-effective default marked, this deployment's authoring
    * capability, and its mode-selection policy beside it.
@@ -283,11 +320,13 @@ export class AgentPresets extends TypertRemoteService {
    * @returns the rows, authoring capability, and effective selection policy.
    */
   @Remote('list')
-  async remoteExportList(): Promise<AgentPresetRoster> {
+  async remoteExportList(workspaceType?: string): Promise<AgentPresetRoster> {
     // Keep the visible policy and marked default from the same settings
     // snapshot even when discovery yields while settings are hot-reloaded.
     const policy = this.selectionPolicy()
-    const presets = await this.list()
+    const presets = workspaceType === undefined
+      ? await this.list()
+      : await this.resolveForWorkspace(workspaceType)
     return {
       presets: presets.map(preset => ({
         id: preset.id,
@@ -295,6 +334,9 @@ export class AgentPresets extends TypertRemoteService {
         isDefault: preset.id === policy.defaultId,
         ...preset.name === undefined ? {} : { name: preset.name },
         ...preset.description === undefined ? {} : { description: preset.description },
+        ...preset.workspaceTypes === undefined ? {} : { workspaceTypes: preset.workspaceTypes },
+        ...preset.capabilities === undefined ? {} : { capabilities: preset.capabilities },
+        ...preset.enabled === false ? { enabled: false } : {},
         ...preset.broken === undefined ? {} : { broken: preset.broken },
       })),
       authorable: this.authorable,
@@ -396,6 +438,13 @@ export class AgentPresets extends TypertRemoteService {
    */
   private async resolveMountable(id?: string): Promise<AgentPreset> {
     const preset = await this.resolve(id)
+    if (preset.enabled === false) {
+      throw new RemoteError(
+        'agent-preset/disabled',
+        `agent-presets: preset "${preset.id}" is disabled`,
+        { agentPreset: preset.id },
+      )
+    }
     if (preset.broken !== undefined) {
       throw new RemoteError(
         'agent-preset/invalid',
@@ -505,6 +554,15 @@ export class AgentPresets extends TypertRemoteService {
     return standingMountFor(agentCtx)?.presetId
   }
 
+  /** Read the exact composition generation joined by one Agent. */
+  async compositionFingerprint(agentCtx: Context): Promise<string | undefined> {
+    const id = this.composedPreset(agentCtx)
+    if (id === undefined) return undefined
+    const pending = this.standing.get(id)
+    if (pending === undefined) return undefined
+    return (await pending).stamp.fingerprint
+  }
+
   /**
    * The roots this roster scans, which is not `config.roots`: the package's
    * shipped root unless `includeShippedRoot` is false, every configured root
@@ -548,7 +606,78 @@ export class AgentPresets extends TypertRemoteService {
       content: await this.read(preset.id),
       ...preset.name === undefined ? {} : { name: preset.name },
       ...preset.description === undefined ? {} : { description: preset.description },
+      ...preset.workspaceTypes === undefined ? {} : { workspaceTypes: preset.workspaceTypes },
+      ...preset.capabilities === undefined ? {} : { capabilities: preset.capabilities },
     }
+  }
+
+  /**
+   * Read the structured editor draft and the host-owned binding catalogs.
+   * System presets can be inspected but not written; copying one into the
+   * user root is the explicit step that makes it editable.
+   */
+  async readDraft(agentPreset: string): Promise<AgentPresetDraft> {
+    validatePresetId(agentPreset, 'agentPreset')
+    return await readDraftDocument(await this.resolve(agentPreset))
+  }
+
+  @Remote('readDraft')
+  async remoteExportReadDraft(agentPreset: string): Promise<AgentPresetDraft> {
+    return await this.readDraft(agentPreset)
+  }
+
+  /** Save a draft without changing the running composition. */
+  async saveDraft(
+    agentPreset: string,
+    expectedRevision: string,
+    draft: AgentPresetDraftInput,
+  ): Promise<AgentPresetDraft> {
+    validatePresetId(agentPreset, 'agentPreset')
+    return await saveDraftDocument(this.resolvedRoots, await this.resolve(agentPreset), expectedRevision, draft)
+  }
+
+  @Remote('saveDraft')
+  async remoteExportSaveDraft(
+    agentPreset: string,
+    expectedRevision: string,
+    draft: AgentPresetDraftInput,
+  ): Promise<AgentPresetDraft> {
+    return await this.saveDraft(agentPreset, expectedRevision, draft)
+  }
+
+  /** Publish a draft as a new immutable composition generation. */
+  async publishDraft(
+    agentPreset: string,
+    expectedRevision: string,
+  ): Promise<AgentPresetPublishResult> {
+    validatePresetId(agentPreset, 'agentPreset')
+    const result = await publishDraftDocument(this.resolvedRoots, await this.resolve(agentPreset), expectedRevision)
+    // The file-backed roster is live; make the next selection resolve the new
+    // generation instead of retaining a previous standing mount for this id.
+    this.standing.delete(agentPreset)
+    return result
+  }
+
+  /** Inspect a draft in an isolated, non-executing preview scope. */
+  async testDraft(agentPreset: string, draft: AgentPresetDraftInput): Promise<AgentPresetTestResult> {
+    validatePresetId(agentPreset, 'agentPreset')
+    return await testDraftDocument(await this.resolve(agentPreset), draft)
+  }
+
+  @Remote('testDraft')
+  async remoteExportTestDraft(
+    agentPreset: string,
+    draft: AgentPresetDraftInput,
+  ): Promise<AgentPresetTestResult> {
+    return await this.testDraft(agentPreset, draft)
+  }
+
+  @Remote('publishDraft')
+  async remoteExportPublishDraft(
+    agentPreset: string,
+    expectedRevision: string,
+  ): Promise<AgentPresetPublishResult> {
+    return await this.publishDraft(agentPreset, expectedRevision)
   }
 
   /**
@@ -750,9 +879,13 @@ export class AgentPresets extends TypertRemoteService {
       )
     }
     const preset = await this.recompose(agent.ctx, agentPreset)
+    const agentCompositionFingerprint = await this.compositionFingerprint(agent.ctx)
     // Recorded only after the swap committed: the log states what the agent
     // runs, and a rejected mount leaves the previous composition.
-    agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+    agent.session.append('agent-preset/selected', {
+      agentPreset: preset.id,
+      ...(agentCompositionFingerprint === undefined ? {} : { agentCompositionFingerprint }),
+    })
     return preset.id
   }
 
@@ -830,13 +963,19 @@ interface CompositionStamp {
   readonly mtimeMs: number
   /** File size in bytes, the tiebreak for edits within one mtime tick. */
   readonly size: number
+  /** Content identity, stable across filesystem timestamp granularity. */
+  readonly fingerprint: string
 }
 
 /** Read one composition file's stamp, or undefined when it cannot be statted. */
 async function compositionStamp(path: string): Promise<CompositionStamp | undefined> {
   try {
-    const { mtimeMs, size } = await stat(path)
-    return { mtimeMs, size }
+    const [{ mtimeMs, size }, content] = await Promise.all([stat(path), readFile(path)])
+    const fingerprint = createHash('sha256')
+      .update('dsh-agent-composition\0')
+      .update(content)
+      .digest('hex')
+    return { mtimeMs, size, fingerprint: `sha256:${fingerprint}` }
   } catch {
     // Deleted, replaced by an unreadable entry, or otherwise unstattable all
     // mean the same to the caller: the file offers no identity to compare.
@@ -846,7 +985,7 @@ async function compositionStamp(path: string): Promise<CompositionStamp | undefi
 
 /** Whether two stamps name the same file state. */
 function sameStamp(a: CompositionStamp, b: CompositionStamp): boolean {
-  return a.mtimeMs === b.mtimeMs && a.size === b.size
+  return a.mtimeMs === b.mtimeMs && a.size === b.size && a.fingerprint === b.fingerprint
 }
 
 /** One preset's standing composition. */

@@ -13,7 +13,7 @@ import type { SessionSummary } from '@deepseek-ai/dsh-api-session-controller/cli
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
   AGENT_PRESET_SETTINGS_NS, AgentPresetSettingsController,
-  writeDefaultPreset, writeModeSelectionEnabled,
+  resolvePresetSelection, writeDefaultPreset, writeModeSelectionEnabled,
 } from '../src/client/settings-store.ts'
 
 /** The roster store over a scripted context. */
@@ -86,6 +86,69 @@ function fakeApi(
 }
 
 describe('the agent-preset roster store', () => {
+  it('requests the roster for the active workspace', async () => {
+    let requestedWorkspace: string | undefined
+    const ctx = fakeRoster([
+      { id: 'standard', trust: 'system', isDefault: true },
+    ])
+    ;(ctx.remote as { agentPresets: { list: (workspaceType?: string) => Promise<unknown> } }).agentPresets.list = (workspaceType?: string) => {
+      requestedWorkspace = workspaceType
+      return Promise.resolve({
+        ok: true as const,
+        value: {
+          presets: [{ id: 'standard', trust: 'system' as const, isDefault: true }],
+          authorable: true,
+          modeSelectionEnabled: true,
+        },
+      })
+    }
+
+    const controller = derivedController(ctx)
+    await controller.load('pms')
+
+    expect(requestedWorkspace).toBe('pms')
+  })
+
+  it('passes the optional workspace filter as an explicit Remote argument', async () => {
+    let argumentCount = 0
+    const ctx = {
+      remote: {
+        agentPresets: {
+          list: async (...args: [string | undefined]) => {
+            argumentCount = args.length
+            return {
+              ok: true as const,
+              value: {
+                presets: [{ id: 'standard', trust: 'system' as const, isDefault: true }],
+                authorable: false,
+                modeSelectionEnabled: true,
+              },
+            }
+          },
+        },
+      },
+    } as unknown as ClientContext
+
+    await derivedController(ctx).load()
+
+    expect(argumentCount).toBe(1)
+  })
+
+  it('resolves explicit, workspace, automatic, then fallback selections in order', () => {
+    const presets = [
+      { id: 'generic', trust: 'system' as const, isDefault: false },
+      { id: 'automatic', trust: 'system' as const, isDefault: true },
+      { id: 'pms-assistant', trust: 'system' as const, isDefault: false, workspaceTypes: ['pms'] },
+    ]
+
+    expect(resolvePresetSelection(presets, 'pms', 'generic')).toEqual({ id: 'generic', source: 'user' })
+    expect(resolvePresetSelection(presets, 'pms')).toEqual({ id: 'pms-assistant', source: 'workspace-default' })
+    expect(resolvePresetSelection(presets, 'oa')).toEqual({ id: 'automatic', source: 'auto' })
+    expect(resolvePresetSelection([{ id: 'generic', trust: 'system', isDefault: false }])).toEqual({
+      id: 'generic', source: 'fallback',
+    })
+  })
+
   it('derives the display options from one roster call', async () => {
     const controller = derivedController(fakeApi([
       { id: 'standard', trust: 'system', isDefault: true },
@@ -195,6 +258,24 @@ describe('the agent-preset roster store', () => {
     expect(state.error).toBe('host down')
   })
 
+  it('surfaces a thrown Remote transport failure instead of staying loading', async () => {
+    const ctx = {
+      remote: {
+        agentPresets: {
+          list: async () => { throw new Error('agent-presets remote is unavailable') },
+        },
+      },
+    } as unknown as ClientContext
+    const controller = derivedController(ctx)
+
+    await controller.load()
+
+    expect(controller.store.getSnapshot()).toMatchObject({
+      status: 'error',
+      error: 'agent-presets remote is unavailable',
+    })
+  })
+
   it('ignores a load while one is already in flight', async () => {
     const writes: Recorded[] = []
     const controller = derivedController(fakeApi(
@@ -274,6 +355,45 @@ describe('the new-session chip controller', () => {
       { id: 'standard', trust: 'system' },
       { id: 'minimal', trust: 'system' },
     ])
+  })
+
+  it('routes the seat roster through the active workspace and restores its projection', async () => {
+    let requestedWorkspace: string | undefined
+    const controller = new AgentPresetSeatController({
+      remote: {
+        agentPresets: {
+          list: (workspaceType?: string) => {
+            requestedWorkspace = workspaceType
+            return Promise.resolve({
+              ok: true as const,
+              value: {
+                presets: [
+                  { id: 'standard', trust: 'system' as const, isDefault: true },
+                  { id: 'pms-assistant', trust: 'system' as const, isDefault: false, workspaceTypes: ['pms'] },
+                ],
+                authorable: true,
+                modeSelectionEnabled: true,
+              },
+            })
+          },
+        },
+      },
+    } as unknown as ClientContext, () => ({
+      id: 's1' as SessionId,
+      blank: false,
+      projectionValues: { agentPreset: 'pms-assistant' },
+    }), () => 'pms')
+
+    await controller.load()
+
+    expect(requestedWorkspace).toBe('pms')
+    expect(controller.store.getSnapshot()).toMatchObject({
+      workspaceType: 'pms',
+      current: 'pms-assistant',
+      source: 'workspace-default',
+      locked: true,
+      lockedAgentPreset: 'pms-assistant',
+    })
   })
 
   it('takes picker visibility from the newest Host roster truth', async () => {
@@ -414,6 +534,22 @@ describe('the new-session chip controller', () => {
 
     // The host enforces the same rule; the chip simply never asks.
     expect(writes).toEqual([])
+  })
+
+  it('marks a running session as locked and preserves the refusal message', async () => {
+    const controller = chip(ROSTER, {
+      id: 's1' as SessionId,
+      blank: false,
+      projectionValues: { agentPreset: 'standard' },
+    })
+    await controller.load()
+
+    expect(controller.store.getSnapshot()).toMatchObject({
+      locked: true,
+      lockedAgentPreset: 'standard',
+    })
+    expect(await controller.selectForNextSession('minimal')).toBe('当前会话已开始，无法切换 Agent')
+    expect(controller.store.getSnapshot().current).toBe('standard')
   })
 
   it('drops the stage when the session already runs it', async () => {

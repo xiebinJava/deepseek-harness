@@ -1,5 +1,5 @@
-/* Agent-preset chip on the new-session screen, beside the workspace picker.
-   Geometry mirrors HeroShell's .workspace so the two read as one row. */
+/* Agent-preset selector in the composer footer. The cold-start fallback uses
+   the same compact geometry beside the workspace picker. */
 
 /* Overflow-driven degradation (mirrors HeroShell's .workspace), no
    breakpoint: the label shrinks with an ellipsis down to nothing, so the
@@ -42,6 +42,23 @@
 .seat:disabled {
   cursor: default;
   color: var(--dsw-alias-label-quaternary);
+}
+
+.unavailable {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  max-width: 240px;
+  padding: 0 8px;
+  color: var(--dsw-alias-label-caption);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.unavailableIcon {
+  flex: none;
+  color: var(--dsw-alias-state-warn-primary);
 }
 
 .seatIcon {

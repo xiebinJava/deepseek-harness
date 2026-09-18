@@ -146,6 +146,31 @@ describe('the roster a client reads', () => {
     expect(roster.presets.find(row => row.id === 'damaged')?.broken).toEqual(expect.any(String))
   })
 
+  it('keeps a disabled preset visible but refuses to select it', async () => {
+    const userRoot = await mkdtemp(join(tmpdir(), 'dsh-preset-disabled-'))
+    roots.push(userRoot)
+    await mkdir(join(userRoot, 'disabled'), { recursive: true })
+    await writeFile(join(userRoot, 'disabled', COMPOSITION_FILE), VALID)
+    await writeFile(join(userRoot, 'disabled', METADATA_FILE), 'name: 暂停助手\nenabled: false\n')
+    const ctx = await harness({
+      default: 'standard',
+      roots: [{ path: join(FIXTURES, 'system'), trust: 'system' }, { path: userRoot, trust: 'user' }],
+      includeShippedRoot: false,
+      includeUserRoot: false,
+    })
+    const agent = await agentOn(ctx, 'sel-disabled', 'standard')
+
+    const roster = await ctx.agentPresets.remoteExportList()
+    expect(roster.presets.find(row => row.id === 'disabled')).toMatchObject({
+      id: 'disabled', enabled: false,
+    })
+    const failure = await remoteFailure(ctx.agentPresets.select(agent, 'disabled'))
+    expect(failure).toMatchObject({
+      code: 'agent-preset/disabled',
+      details: { agentPreset: 'disabled' },
+    })
+  })
+
   it('answers an empty roster with nothing authorable', async () => {
     const ctx = await harness({ default: 'standard', roots: [], includeShippedRoot: false, includeUserRoot: false })
 
@@ -154,6 +179,41 @@ describe('the roster a client reads', () => {
     // Composing no presets is a valid deployment: every session then shares
     // the host composition, and nothing can be written either.
     expect(roster).toEqual({ presets: [], authorable: false, modeSelectionEnabled: true })
+  })
+
+  it('filters workspace-specific presets while retaining generic presets', async () => {
+    const userRoot = await mkdtemp(join(tmpdir(), 'dsh-preset-workspace-'))
+    roots.push(userRoot)
+    for (const [id, metadata] of [
+      ['generic', 'name: 通用助手\n'],
+      ['pms-assistant', 'name: PMS 项目助手\nworkspaceTypes:\n  - pms\ncapabilities:\n  - pms:query\n'],
+      ['oa-assistant', 'name: OA 助手\nworkspaceTypes:\n  - oa\n'],
+    ] as const) {
+      await mkdir(join(userRoot, id), { recursive: true })
+      await writeFile(join(userRoot, id, COMPOSITION_FILE), VALID)
+      await writeFile(join(userRoot, id, METADATA_FILE), metadata)
+    }
+    const ctx = await harness({
+      default: 'generic',
+      roots: [{ path: userRoot, trust: 'user' }],
+      includeShippedRoot: false,
+      includeUserRoot: false,
+    })
+
+    const roster = await ctx.agentPresets.remoteExportList('pms')
+
+    expect(roster.presets).toEqual([
+      { id: 'generic', trust: 'user', isDefault: true, name: '通用助手' },
+      {
+        id: 'pms-assistant',
+        trust: 'user',
+        isDefault: false,
+        name: 'PMS 项目助手',
+        workspaceTypes: ['pms'],
+        capabilities: ['pms:query'],
+      },
+    ])
+    expect(roster.presets.some(row => row.id === 'oa-assistant')).toBe(false)
   })
 })
 
@@ -204,6 +264,36 @@ describe('reading one composition', () => {
       content: VALID,
       name: '我的模式',
       description: '只做检索。',
+    })
+  })
+
+  it('carries workspace and capability metadata in the document view', async () => {
+    const userRoot = await mkdtemp(join(tmpdir(), 'dsh-preset-remote-'))
+    roots.push(userRoot)
+    await mkdir(join(userRoot, 'pms-assistant'), { recursive: true })
+    await writeFile(join(userRoot, 'pms-assistant', COMPOSITION_FILE), VALID)
+    await writeFile(join(userRoot, 'pms-assistant', METADATA_FILE), [
+      'name: PMS 项目助手',
+      'workspaceTypes:',
+      '  - pms',
+      'capabilities:',
+      '  - pms:query',
+      '  - pms:command:preview',
+    ].join('\n') + '\n')
+    const ctx = await harness({
+      default: 'pms-assistant',
+      roots: [{ path: userRoot, trust: 'user' }],
+      includeShippedRoot: false,
+      includeUserRoot: false,
+    })
+
+    await expect(ctx.agentPresets.readDocument('pms-assistant')).resolves.toEqual({
+      agentPreset: 'pms-assistant',
+      trust: 'user',
+      content: VALID,
+      name: 'PMS 项目助手',
+      workspaceTypes: ['pms'],
+      capabilities: ['pms:query', 'pms:command:preview'],
     })
   })
 
@@ -364,7 +454,10 @@ describe('switching one session\'s composition', () => {
     // The header is written once at creation, so the switch lives in the log:
     // that is what a restart replays and what every projection resolves from.
     expect(ctx.agentPresets.composedPreset(agent.ctx)).toBe('minimal')
-    expect(recordedPreset(agent)).toEqual({ agentPreset: 'minimal' })
+    expect(recordedPreset(agent)).toMatchObject({
+      agentPreset: 'minimal',
+      agentCompositionFingerprint: expect.stringMatching(/^sha256:/),
+    })
   })
 
   it('treats an absent turn boundary as no prior turn', async () => {
@@ -391,7 +484,10 @@ describe('switching one session\'s composition', () => {
     ])
 
     // One winner, and the log agrees with it: the last committed switch.
-    expect(recordedPreset(agent)).toEqual({ agentPreset: 'standard' })
+    expect(recordedPreset(agent)).toMatchObject({
+      agentPreset: 'standard',
+      agentCompositionFingerprint: expect.stringMatching(/^sha256:/),
+    })
     expect(ctx.agentPresets.composedPreset(agent.ctx)).toBe('standard')
   })
 

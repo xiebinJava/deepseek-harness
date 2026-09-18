@@ -17,6 +17,7 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only: pulls the ctx.remote merge into this program.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import type { AgentPresetDraft, AgentPresetDraftInput, AgentPresetTestResult } from '@deepseek-ai/dsh-agent-presets'
 import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { beginRosterRead, writeDefaultPreset, writeModeSelectionEnabled } from './settings-store.ts'
 
@@ -72,6 +73,19 @@ export interface PresetView {
   content: string
 }
 
+/** The editable draft dialog, kept separate from the roster and copy flow. */
+export interface AgentPresetEditorState {
+  id: string
+  title: string
+  draft: AgentPresetDraft
+  saving: boolean
+  publishing: boolean
+  testing: boolean
+  dirty: boolean
+  error: string | null
+  testResult: AgentPresetTestResult | null
+}
+
 /** Page snapshot. */
 export interface AgentPresetSectionState {
   status: 'idle' | 'loading' | 'ready' | 'unavailable' | 'error'
@@ -91,6 +105,8 @@ export interface AgentPresetSectionState {
   copy: CopyDraft | null
   /** The open read-only viewer, or null. */
   view: PresetView | null
+  /** The open structured Agent editor, or null. */
+  editor: AgentPresetEditorState | null
   /** The preset awaiting delete confirmation. */
   pendingDelete: string | null
   /** Whether a delete is in flight. */
@@ -112,6 +128,7 @@ const INITIAL: AgentPresetSectionState = {
   rows: [],
   copy: null,
   view: null,
+  editor: null,
   pendingDelete: null,
   deleting: false,
   revealedPaths: {},
@@ -290,6 +307,126 @@ export class AgentPresetSectionController {
   /** Close the read-only viewer. */
   closeView(): void {
     this.set({ view: null })
+  }
+
+  /** Open the structured editor for a locally authored preset. */
+  async beginEdit(id: string): Promise<void> {
+    const row = this.store.getSnapshot().rows.find(candidate => candidate.id === id)
+    if (row?.trust !== 'user') {
+      this.set({ editor: null, error: 'read-only: 内置 Agent 不能直接修改，请先复制为自定义 Agent' })
+      return
+    }
+    this.set({ error: null })
+    const result = await this.ctx.remote.agentPresets.readDraft(id)
+    if (!result.ok) {
+      this.set({ editor: null, error: result.error.message })
+      return
+    }
+    this.set({
+      editor: {
+        id,
+        title: row.name ?? id,
+        draft: result.value,
+        saving: false,
+        publishing: false,
+        testing: false,
+        dirty: false,
+        error: null,
+        testResult: null,
+      },
+    })
+  }
+
+  /** Close the structured Agent editor without changing the draft on disk. */
+  closeEditor(): void {
+    const editor = this.store.getSnapshot().editor
+    if (editor?.saving || editor?.publishing || editor?.testing) return
+    this.set({ editor: null })
+  }
+
+  private patchEditor(patch: Partial<AgentPresetEditorState>): void {
+    const editor = this.store.getSnapshot().editor
+    if (editor === null) return
+    this.set({ editor: { ...editor, ...patch } })
+  }
+
+  /** Update either the identity or behavior half of the Agent prompt. */
+  setEditorPrompt(field: 'identityPrompt' | 'behaviorPrompt', value: string): void {
+    const editor = this.store.getSnapshot().editor
+    if (editor === null || editor.saving || editor.publishing || editor.testing) return
+    this.patchEditor({ draft: { ...editor.draft, [field]: value }, dirty: true, error: null, testResult: null })
+  }
+
+  /** Toggle one host-registered Skill, plugin, or workspace binding. */
+  setEditorBinding(
+    field: 'selectedSkills' | 'selectedPlugins' | 'workspaceBindings',
+    id: string,
+    enabled: boolean,
+  ): void {
+    const editor = this.store.getSnapshot().editor
+    if (editor === null || editor.saving || editor.publishing) return
+    const current = [...editor.draft[field]]
+    const next = enabled
+      ? [...new Set([...current, id])]
+      : current.filter(value => value !== id)
+    this.patchEditor({ draft: { ...editor.draft, [field]: next }, dirty: true, error: null, testResult: null })
+  }
+
+  /** Save the editor draft using the revision loaded into the dialog. */
+  async saveEditorDraft(): Promise<void> {
+    const editor = this.store.getSnapshot().editor
+    if (editor === null || editor.saving || editor.publishing || !editor.dirty) return
+    this.patchEditor({ saving: true, error: null })
+    const draft: AgentPresetDraftInput = {
+      identityPrompt: editor.draft.identityPrompt,
+      behaviorPrompt: editor.draft.behaviorPrompt,
+      selectedSkills: editor.draft.selectedSkills,
+      selectedPlugins: editor.draft.selectedPlugins,
+      workspaceBindings: editor.draft.workspaceBindings,
+    }
+    const result = await this.ctx.remote.agentPresets.saveDraft(editor.id, editor.draft.revision, draft)
+    if (!result.ok) {
+      this.patchEditor({ saving: false, error: result.error.message })
+      return
+    }
+    this.set({ editor: { ...this.store.getSnapshot().editor!, draft: result.value, saving: false, dirty: false, error: null, testResult: null } })
+  }
+
+  /** Publish the current draft and refresh every roster surface. */
+  async publishEditorDraft(): Promise<void> {
+    const editor = this.store.getSnapshot().editor
+    if (editor === null || editor.saving || editor.publishing || editor.testing || editor.dirty) return
+    this.patchEditor({ publishing: true, error: null })
+    const result = await this.ctx.remote.agentPresets.publishDraft(editor.id, editor.draft.revision)
+    if (!result.ok) {
+      this.patchEditor({ publishing: false, error: result.error.message })
+      return
+    }
+    this.set({ editor: null })
+    await this.load()
+    this.rosterChanged()
+  }
+
+  /** Preview the current draft without saving, mounting, or executing it. */
+  async testEditorDraft(): Promise<void> {
+    const editor = this.store.getSnapshot().editor
+    if (editor === null || editor.saving || editor.publishing || editor.testing) return
+    this.patchEditor({ testing: true, error: null })
+    const draft: AgentPresetDraftInput = {
+      identityPrompt: editor.draft.identityPrompt,
+      behaviorPrompt: editor.draft.behaviorPrompt,
+      selectedSkills: editor.draft.selectedSkills,
+      selectedPlugins: editor.draft.selectedPlugins,
+      workspaceBindings: editor.draft.workspaceBindings,
+    }
+    const result = await this.ctx.remote.agentPresets.testDraft(editor.id, draft)
+    if (!result.ok) {
+      this.patchEditor({ testing: false, error: result.error.message })
+      return
+    }
+    const latest = this.store.getSnapshot().editor
+    if (latest === null) return
+    this.set({ editor: { ...latest, testing: false, error: null, testResult: result.value } })
   }
 
   /**

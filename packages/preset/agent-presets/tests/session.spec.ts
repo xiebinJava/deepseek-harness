@@ -3,7 +3,10 @@
 import { describe, expect, it } from 'vitest'
 import { SESSION_FORMAT_VERSION, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
-import { agentPresetProjectionDefinition } from '../src/session.ts'
+import {
+  agentCompositionFingerprintProjectionDefinition,
+  agentPresetProjectionDefinition,
+} from '../src/session.ts'
 
 /** A header carrying the creation-time preset, if any. */
 function header(agentPreset?: string): SessionHeader {
@@ -18,8 +21,20 @@ function header(agentPreset?: string): SessionHeader {
 }
 
 /** One logged selection, as `agentPreset.select` appends it. */
-function selected(agentPreset: string, seq: SessionSeq): SessionEvent {
-  return { type: 'agent-preset/selected', seq, time: seq, data: { agentPreset } }
+function selected(
+  agentPreset: string,
+  seq: SessionSeq,
+  agentCompositionFingerprint?: string,
+): SessionEvent {
+  return {
+    type: 'agent-preset/selected',
+    seq,
+    time: seq,
+    data: {
+      agentPreset,
+      ...(agentCompositionFingerprint === undefined ? {} : { agentCompositionFingerprint }),
+    },
+  }
 }
 
 describe('agent preset selection projection', () => {
@@ -41,5 +56,29 @@ describe('agent preset selection projection', () => {
 
     expect(definition.wire.view(state)).toBe('cordis')
     expect(definition.stateSchema.parse(state)).toBe('cordis')
+  })
+})
+
+describe('agent composition fingerprint projection', () => {
+  it('starts absent for legacy headers and clears identity for legacy selections', () => {
+    const definition = agentCompositionFingerprintProjectionDefinition
+    let state = definition.init(header('standard'))
+    expect(state).toBeNull()
+
+    state = definition.apply(state, {
+      type: 'agent-preset/selected',
+      seq: SessionSeq(0),
+      time: 0,
+      data: { agentPreset: 'standard', agentCompositionFingerprint: 'sha256:one' },
+    })
+    state = definition.apply(state, {
+      type: 'agent-preset/selected',
+      seq: SessionSeq(1),
+      time: 1,
+      data: { agentPreset: 'standard' },
+    })
+
+    expect(state).toBeNull()
+    expect(definition.wire.view(state)).toBeNull()
   })
 })

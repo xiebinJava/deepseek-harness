@@ -252,6 +252,14 @@ export class Session implements SessionFace {
         mode,
         content,
         clientTimeZone,
+        ...(typeof this.projections.get('agentPreset') === 'string'
+          ? { agentPreset: this.projections.get('agentPreset') as string }
+          : {}),
+        ...(typeof this.projections.get('agentCompositionFingerprint') === 'string'
+          ? {
+            agentCompositionFingerprint: this.projections.get('agentCompositionFingerprint') as string,
+          }
+          : {}),
       }, signal)
     } else if (content.some(part => part.type === 'file')) {
       result = {
@@ -784,8 +792,12 @@ export class Session implements SessionFace {
   }
 
   private buildSnapshot(): SessionSnapshot {
+    const agentPreset = this.projections.get('agentPreset')
+    const agentCompositionFingerprint = this.projections.get('agentCompositionFingerprint')
     return {
       sessionId: this.sessionId,
+      ...(typeof agentPreset === 'string' ? { agentPreset } : {}),
+      ...(typeof agentCompositionFingerprint === 'string' ? { agentCompositionFingerprint } : {}),
       pendingSubmissions: this.pendingSubmissions,
       running: this.running,
       subagent: this.address === undefined

@@ -534,6 +534,29 @@ describe('prompt and cancel errors', () => {
     expect(session.getSnapshot()).toMatchObject({ running: true, awaitingFirstTurn: false })
   })
 
+  it('sends the persisted Agent identity and composition fingerprint with each prompt', async ({ mock, start }) => {
+    const session = await sessionBench(mock, start, SID)
+    session.projections.seed({
+      asOfSeq: SessionSeq(4),
+      values: {
+        agentPreset: 'pms-assistant',
+        agentCompositionFingerprint: 'sha256:pms-v1',
+      },
+    })
+
+    await session.prompt([{ type: 'text', text: '查询项目' }], 'queue')
+
+    expect(mock.log.requests('session/prompt')).toMatchObject([{
+      sessionId: SID,
+      agentPreset: 'pms-assistant',
+      agentCompositionFingerprint: 'sha256:pms-v1',
+    }])
+    expect(session.getSnapshot()).toMatchObject({
+      agentPreset: 'pms-assistant',
+      agentCompositionFingerprint: 'sha256:pms-v1',
+    })
+  })
+
   it('keeps the attempted-first-prompt state when the Host rejects the prompt', async ({ mock, start }) => {
     const session = await sessionBench(mock, start, SID)
     session.handleBlank(true)
