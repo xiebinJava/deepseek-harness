@@ -1,13 +1,21 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { PmsIntegrationClient } from '../client/PmsIntegrationClient.ts'
-import type { PmsCommandPreviewRequest, PmsCommandResult, PmsContextLocator, PmsJsonObject } from '../types.ts'
+import type {
+  PmsCapabilities,
+  PmsCommandPreviewRequest,
+  PmsCommandResult,
+  PmsContextLocator,
+  PmsJsonObject,
+  PmsOperationBinding,
+} from '../types.ts'
 import type { PmsContextStore } from '../context/pms-context-store.ts'
 
 const COMMANDS = [
   'member.add', 'member.remove',
   'node.complete', 'node.owner.update', 'node.rollback', 'node.schedule.update',
   'project.archive', 'project.create', 'project.delete',
+  'project.update',
   'task.create', 'task.assign', 'task.update',
 ] as const
 
@@ -50,9 +58,17 @@ export function registerPmsCommandTools(
       schema: { type: 'json' },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
     },
-    execute: (args, exec) => {
+    execute: async (args, exec) => {
       const locator = contextStore.get(exec.agent?.id)
-      const request = buildPreviewRequest(args, locator)
+      // Fail closed before any PMS call when this node has no usable contract.
+      const binding = requireOperationBinding(locator, contextStore.getContract(exec.agent?.id))
+      const capabilities = await client.capabilities(exec.signal, exec.agent?.id)
+      const request = buildPreviewRequest(
+        args,
+        binding,
+        acceptedArguments(capabilities, args.command),
+        locator,
+      )
       return client.previewCommand(request, exec.signal, exec.agent?.id)
     },
     isConcurrencySafe: () => false,
@@ -80,11 +96,15 @@ export async function executePmsOperation(
   args: { operationId: string; idempotencyKey?: string },
   exec: { signal: AbortSignal; agent?: { id?: string } },
 ): Promise<PmsCommandResult> {
+  const locator = contextStore.get(exec.agent?.id)
+  const contractState = contextStore.getContract(exec.agent?.id)
+  const binding = requireOperationBinding(locator, contractState)
   const result = await client.executeOperation(
     args.operationId,
     args.idempotencyKey ?? stableIdempotencyKey(args.operationId),
     exec.signal,
     exec.agent?.id,
+    binding,
   )
   if (isSuccessfulPmsOperation(result)) {
     contextStore.queueRefresh(exec.agent?.id, refreshScopes(result.refreshScopes), result.operationId)
@@ -111,20 +131,60 @@ function buildPreviewRequest(args: {
   arguments: Record<string, unknown>
   contextId?: string
   contextVersion?: string
-}, locator: PmsContextLocator | undefined): PmsCommandPreviewRequest {
+}, binding: PmsOperationBinding, declared: ReadonlySet<string> | undefined,
+locator: PmsContextLocator | undefined): PmsCommandPreviewRequest {
+  const requestedContextId = args.contextId?.trim()
+  const requestedContextVersion = args.contextVersion?.trim()
+  if ((requestedContextId !== undefined && requestedContextId !== binding.contextId)
+    || (requestedContextVersion !== undefined && requestedContextVersion !== binding.contextVersion)) {
+    throw new Error('PMS 写操作上下文必须绑定当前项目和节点')
+  }
+  // Only fill the current PMS page context into the arguments PMS actually
+  // declares. Commands such as `project.create` take no project or node, and an
+  // injected `projectId` makes PMS reject the whole preview.
+  const accepts = (key: string): boolean => declared === undefined || declared.has(key)
   const commandArguments: PmsJsonObject = { ...args.arguments } as PmsJsonObject
-  if (commandArguments.projectId === undefined && locator?.projectId !== undefined) {
+  if (commandArguments.projectId === undefined && locator?.projectId !== undefined && accepts('projectId')) {
     commandArguments.projectId = locator.projectId
   }
-  if (commandArguments.nodeId === undefined && locator?.nodeId !== undefined) {
+  if (commandArguments.nodeId === undefined && locator?.nodeId !== undefined && accepts('nodeId')) {
     commandArguments.nodeId = locator.nodeId
   }
-  const projectPart = commandArguments.projectId ?? 'none'
-  const nodePart = commandArguments.nodeId ?? 'none'
   return {
     name: args.command,
     arguments: commandArguments,
-    contextId: args.contextId?.trim() || `pms:${locator?.pageType ?? 'global'}:${projectPart}:${nodePart}`,
-    contextVersion: args.contextVersion?.trim() || locator?.contextVersion || 'v1',
+    contextId: binding.contextId,
+    contextVersion: binding.contextVersion,
+    contractId: binding.contractId,
+    contractVersion: binding.contractVersion,
+  }
+}
+
+/**
+ * Argument names the PMS capability catalog declares for one command, or
+ * `undefined` when PMS did not publish that command in this session.
+ */
+function acceptedArguments(capabilities: PmsCapabilities, command: string): ReadonlySet<string> | undefined {
+  const descriptor = capabilities.commands?.find(item => item.name === command)
+  if (descriptor === undefined) return undefined
+  const parameters: unknown = descriptor.parameters
+  if (parameters === null || typeof parameters !== 'object' || Array.isArray(parameters)) return undefined
+  return new Set(Object.keys(parameters))
+}
+
+function requireOperationBinding(
+  locator: PmsContextLocator | undefined,
+  contractState: ReturnType<PmsContextStore['getContract']>,
+): PmsOperationBinding {
+  if (contractState?.status !== 'ready' || contractState.contract === undefined) {
+    throw new Error('PMS 当前节点契约未加载，禁止执行写入')
+  }
+  const projectPart = locator?.projectId ?? 'none'
+  const nodePart = locator?.nodeId ?? 'none'
+  return {
+    contextId: `pms:${locator?.pageType ?? 'global'}:${projectPart}:${nodePart}`,
+    contextVersion: locator?.contextVersion || 'v1',
+    contractId: contractState.contract.contractId,
+    contractVersion: contractState.contract.contractVersion,
   }
 }

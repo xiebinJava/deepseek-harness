@@ -8,6 +8,7 @@ import { PmsIntegrationClient } from '@deepseek-ai/dsh-pms'
 import { PmsContextStore } from '../src/context/pms-context-store.ts'
 import { pmsSessionTags } from '../src/context/pms-session-tags.ts'
 import { executePmsOperation } from '../src/tools/command.ts'
+import type { PmsAgentContract } from '../src/types.ts'
 
 const activeContexts: Context[] = []
 
@@ -34,7 +35,98 @@ function requestBody(body: BodyInit | null | undefined): string | undefined {
   return typeof body === 'string' ? body : undefined
 }
 
+function kickoffContract(): PmsAgentContract {
+  return {
+    contractId: 'pms-project-assistant/project-kickoff', agentId: 'project_assistant',
+    contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+    required: true, locale: 'zh-CN', principalRole: 'PMS 项目经理', specializedAgents: [],
+    readCapabilities: ['项目上下文'], readToolBindings: { 'project-context': 'pms_project_get' },
+    writeCommands: ['project.create'], confirmationPolicies: { 'project.create': 'preview-and-confirm' },
+    entryConditions: ['首个节点'], inputs: ['项目基本信息'], missingInputRules: ['不得猜测'],
+    executionSteps: ['读取状态'], completionCriteria: ['必填字段完整'],
+    failureStrategies: ['鉴权失败即停止'], terminationConditions: ['用户未确认'],
+    contentSha256: 'e'.repeat(64),
+  }
+}
+
+function markWriteReady(store: PmsContextStore, sessionId: string): void {
+  store.setContract(sessionId, { status: 'ready', contract: kickoffContract() })
+}
+
 describe('PmsIntegrationClient', () => {
+  it('fetches and caches a versioned Agent contract through the internal bridge', async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({
+        version: 'v1', tools: ['pms_project_get'], scopes: ['pms:query:read'], pageTypes: [],
+        queries: [], commands: [], agentContracts: [{
+          agentId: 'project_assistant', contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+          endpoint: '/integration/dsh/v1/agent-contracts/{agentId}/{contractKey}',
+          scope: 'pms:query:read', required: true,
+        }],
+      }))
+      .mockResolvedValueOnce(response({
+        contractId: 'pms-project-assistant/project-kickoff', agentId: 'project_assistant',
+        contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+        required: true, locale: 'zh-CN', principalRole: 'PMS 项目经理', specializedAgents: [],
+        readCapabilities: ['项目上下文'], readToolBindings: { 'project-context': 'pms_project_get' },
+        writeCommands: ['project.create'], confirmationPolicies: { 'project.create': 'preview-and-confirm' },
+        entryConditions: ['首个节点'], inputs: ['项目基本信息'], missingInputRules: ['不得猜测'],
+        executionSteps: ['读取状态'], completionCriteria: ['必填字段完整'],
+        failureStrategies: ['鉴权失败即停止'], terminationConditions: ['用户未确认'],
+        contentSha256: 'a'.repeat(64),
+      }))
+    const client = new PmsIntegrationClient({
+      baseUrl: 'http://pms.test', apiPrefix: '/api', accessToken: 'short-token',
+      agentId: 'project_assistant', dshSessionId: 'session-1', requestTimeoutMs: 1000,
+      fetchImpl, requestIdFactory: () => 'request-1',
+    })
+
+    const first = await client.getAgentContract('project_assistant', 'project-kickoff', undefined, 'session-1')
+    const second = await client.getAgentContract('project_assistant', 'project-kickoff', undefined, 'session-1')
+
+    expect(first.contractVersion).toBe('1.0.0')
+    expect(second.contentSha256).toBe('a'.repeat(64))
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    const [contractUrl, contractInit] = fetchImpl.mock.calls[1]!
+    expect(requestUrl(contractUrl)).toBe(
+      'http://pms.test/api/integration/dsh/v1/agent-contracts/project_assistant/project-kickoff')
+    expect(contractInit?.headers).toMatchObject({
+      'X-PMS-AI-Delegation': 'short-token',
+      'X-DSH-Tool': 'pms_agent_contract',
+    })
+  })
+
+  it('rejects a contract response whose identity does not match capability discovery', async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({
+        version: 'v1', tools: ['pms_project_get'], scopes: ['pms:query:read'], pageTypes: [],
+        queries: [], commands: [], agentContracts: [{
+          agentId: 'project_assistant', contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+          endpoint: '/integration/dsh/v1/agent-contracts/{agentId}/{contractKey}',
+          scope: 'pms:query:read', required: true,
+        }],
+      }))
+      .mockResolvedValueOnce(response({
+        contractId: 'pms-project-assistant/other', agentId: 'other_agent',
+        contractKey: 'other-contract', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+        required: true, locale: 'zh-CN', principalRole: '错误契约', specializedAgents: [],
+        readCapabilities: ['项目上下文'], readToolBindings: { 'project-context': 'pms_project_get' },
+        writeCommands: ['project.create'], confirmationPolicies: { 'project.create': 'preview-and-confirm' },
+        entryConditions: ['首个节点'], inputs: ['项目基本信息'], missingInputRules: ['不得猜测'],
+        executionSteps: ['读取状态'], completionCriteria: ['必填字段完整'],
+        failureStrategies: ['鉴权失败即停止'], terminationConditions: ['用户未确认'],
+        contentSha256: 'd'.repeat(64),
+      }))
+    const client = new PmsIntegrationClient({
+      baseUrl: 'http://pms.test', apiPrefix: '/api', accessToken: 'short-token',
+      agentId: 'project_assistant', requestTimeoutMs: 1000, fetchImpl,
+    })
+
+    await expect(client.getAgentContract('project_assistant', 'project-kickoff')).rejects.toThrow(
+      'PMS Agent contract identity mismatch',
+    )
+  })
+
   it('discovers command metadata and exposes preview/execute through the DSH facade', async () => {
     const fetchImpl = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(response({
@@ -121,7 +213,12 @@ describe('PmsIntegrationClient', () => {
         queries: [], commands: [{
           name: 'task.create', description: '创建任务', access: 'write', risk: 'medium',
           requiresConfirmation: true, scopes: ['pms:task:write', 'pms:command:preview'],
-          parameters: {}, supportsPreview: true, supportsExecute: true, refreshScopes: [],
+          parameters: {
+            projectId: { type: 'integer', required: true },
+            nodeId: { type: 'integer', required: true },
+            title: { type: 'string', required: true },
+          },
+          supportsPreview: true, supportsExecute: true, refreshScopes: [],
         }],
       }))
       .mockResolvedValueOnce(response({
@@ -139,7 +236,20 @@ describe('PmsIntegrationClient', () => {
     expect(pmsPrompt?.text).toContain('所有可见字段标签必须使用中文')
     expect(pmsPrompt?.text).toContain('操作编号')
     const store = ctx.get('pmsContextStore') as PmsContextStore
-    store.set('session-1', { pageType: 'project-detail', projectId: 22, nodeId: 7, contextVersion: 'pms-v1' })
+    store.set('session-1', {
+      pageType: 'project-detail', projectId: 22, nodeId: 7, currentNodeKey: 'kickoff', contextVersion: 'pms-v1',
+    })
+    const contract: PmsAgentContract = {
+      contractId: 'pms-project-assistant/project-kickoff', agentId: 'project_assistant',
+      contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0', required: true,
+      locale: 'zh-CN', principalRole: 'PMS 项目经理', specializedAgents: [],
+      readCapabilities: ['项目上下文'], readToolBindings: { 'project-context': 'pms_project_get' },
+      writeCommands: ['task.create'], confirmationPolicies: { 'task.create': 'preview-and-confirm' },
+      entryConditions: ['节点已进入'], inputs: ['任务名称'], missingInputRules: ['不得猜测'],
+      executionSteps: ['读取状态', '创建任务'], completionCriteria: ['任务字段完整'],
+      failureStrategies: ['鉴权失败即停止'], terminationConditions: ['用户未确认'], contentSha256: 'd'.repeat(64),
+    }
+    store.setContract('session-1', { status: 'ready', contract })
 
     const result = await ctx.tools.execute({
       signal: new AbortController().signal,
@@ -156,6 +266,66 @@ describe('PmsIntegrationClient', () => {
       arguments: { title: '测试任务', projectId: 22, nodeId: 7 },
       contextId: 'pms:project-detail:22:7',
       contextVersion: 'pms-v1',
+      contractId: 'pms-project-assistant/project-kickoff',
+      contractVersion: '1.0.0',
+    })
+  })
+
+  it('honors the PMS parameter contract instead of injecting the current project into every command', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response({
+        version: 'v1', tools: ['pms_command_preview'],
+        scopes: ['pms:project:write', 'pms:command:preview'], pageTypes: ['project-detail'],
+        queries: [], commands: [{
+          name: 'project.create', description: '创建项目', access: 'write', risk: 'medium',
+          requiresConfirmation: true, scopes: ['pms:project:write', 'pms:command:preview'],
+          parameters: { name: { type: 'string', required: true } },
+          supportsPreview: true, supportsExecute: true, refreshScopes: [],
+        }],
+      }))
+      .mockResolvedValueOnce(response({
+        operationId: 'op-create-project', command: 'project.create', warnings: [], changes: [],
+      }))
+    const ctx = new Context()
+    activeContexts.push(ctx)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(DshPms, {
+      baseUrl: 'http://pms.test', apiPrefix: '/api', accessToken: 'short-token', requestTimeoutMs: 1000,
+    })
+    const store = ctx.get('pmsContextStore') as PmsContextStore
+    store.set({ pageType: 'project-detail', projectId: 22, nodeId: 7, currentNodeKey: 'kickoff', contextVersion: 'pms-v1' })
+    store.setContract(undefined, {
+      status: 'ready',
+      contract: {
+        contractId: 'pms-project-assistant/project-kickoff', agentId: 'project_assistant',
+        contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+        required: true, locale: 'zh-CN', principalRole: 'PMS 项目经理', specializedAgents: [],
+        readCapabilities: ['项目上下文'], readToolBindings: { 'project-context': 'pms_project_get' },
+        writeCommands: ['project.create'], confirmationPolicies: { 'project.create': 'preview-and-confirm' },
+        entryConditions: ['首个节点'], inputs: ['项目名称'], missingInputRules: ['不得猜测'],
+        executionSteps: ['读取状态'], completionCriteria: ['项目已创建'],
+        failureStrategies: ['鉴权失败即停止'], terminationConditions: ['用户未确认'],
+        contentSha256: '1'.repeat(64),
+      },
+    })
+
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: ToolCallId('preview-project-create'),
+      name: 'pms_command_preview',
+      arguments: { command: 'project.create', arguments: { name: '新项目' } },
+    })
+
+    expect(result.isError).toBe(false)
+    const [, init] = fetchMock.mock.calls[1]!
+    expect(JSON.parse(requestBody(init?.body) ?? '')).toEqual({
+      name: 'project.create',
+      arguments: { name: '新项目' },
+      contextId: 'pms:project-detail:22:7',
+      contextVersion: 'pms-v1',
+      contractId: 'pms-project-assistant/project-kickoff',
+      contractVersion: '1.0.0',
     })
   })
 
@@ -178,6 +348,78 @@ describe('PmsIntegrationClient', () => {
       callId: ToolCallId('execute-call'),
       name: 'pms_command_execute',
       arguments: { operationId: 'op-1' },
+      agent: { id: 'session-1' } as never,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(0)
+  })
+
+  it('blocks a project-detail write preview when the current node contract is unavailable', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const ctx = new Context()
+    activeContexts.push(ctx)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(DshPms, {
+      baseUrl: 'http://pms.test', apiPrefix: '/api', accessToken: 'short-token', requestTimeoutMs: 1000,
+    })
+    const store = ctx.get('pmsContextStore') as PmsContextStore
+    store.set('session-1', {
+      pageType: 'project-detail', route: '/projects/22', projectId: 22, nodeId: 7,
+    })
+
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: ToolCallId('contract-required-preview'),
+      name: 'pms_command_preview',
+      arguments: { command: 'project.create', arguments: { name: '不应执行' } },
+      agent: { id: 'session-1' } as never,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(0)
+  })
+
+  it('blocks a project-detail write execution when the current node contract is unavailable', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const ctx = new Context()
+    activeContexts.push(ctx)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(DshPms, {
+      baseUrl: 'http://pms.test', apiPrefix: '/api', accessToken: 'short-token', requestTimeoutMs: 1000,
+    })
+    const store = ctx.get('pmsContextStore') as PmsContextStore
+    store.set('session-1', { pageType: 'project-detail', projectId: 22, nodeId: 7 })
+
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: ToolCallId('contract-required-execute'),
+      name: 'pms_command_execute',
+      arguments: { operationId: 'op-stale' },
+      agent: { id: 'session-1' } as never,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(0)
+  })
+
+  it('blocks writes without a contract even when the PMS page locator is absent', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    const ctx = new Context()
+    activeContexts.push(ctx)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(DshPms, {
+      baseUrl: 'http://pms.test', apiPrefix: '/api', accessToken: 'short-token', requestTimeoutMs: 1000,
+    })
+
+    const result = await ctx.tools.execute({
+      signal: new AbortController().signal,
+      callId: ToolCallId('contract-required-without-locator'),
+      name: 'pms_command_preview',
+      arguments: { command: 'project.create', arguments: { name: '不应执行' } },
       agent: { id: 'session-1' } as never,
     })
 
@@ -298,6 +540,132 @@ describe('PmsIntegrationClient', () => {
 })
 
 describe('dsh-pms tools and context', () => {
+  it('injects the current kickoff contract as a tracked system-prompt section', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response({
+        version: 'v1', tools: ['pms_project_get'], scopes: ['pms:query:read'], pageTypes: [],
+        queries: [], commands: [], agentContracts: [{
+          agentId: 'project_assistant', contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+          endpoint: '/integration/dsh/v1/agent-contracts/{agentId}/{contractKey}',
+          scope: 'pms:query:read', required: true,
+        }],
+      }))
+      .mockResolvedValueOnce(response({
+        contractId: 'pms-project-assistant/project-kickoff', agentId: 'project_assistant',
+        contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+        required: true, locale: 'zh-CN', principalRole: 'PMS 项目经理', specializedAgents: [],
+        readCapabilities: ['项目上下文'], readToolBindings: { 'project-context': 'pms_project_get' },
+        writeCommands: ['project.create'], confirmationPolicies: { 'project.create': 'preview-and-confirm' },
+        entryConditions: ['首个节点'], inputs: ['项目基本信息'], missingInputRules: ['不得猜测'],
+        executionSteps: ['读取状态'], completionCriteria: ['必填字段完整'],
+        failureStrategies: ['鉴权失败即停止'], terminationConditions: ['用户未确认'],
+        contentSha256: 'b'.repeat(64),
+      }))
+    const ctx = new Context()
+    activeContexts.push(ctx)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(DshPms, {
+      mode: 'full', tools: ['pms_command_preview'],
+      baseUrl: 'http://pms.test', apiPrefix: '/api', accessToken: 'short-token',
+      agentId: 'project_assistant', requestTimeoutMs: 1000,
+    })
+    const store = ctx.get('pmsContextStore') as PmsContextStore
+    store.set({
+      pageType: 'project-detail', route: '/projects/22', projectId: 22, nodeId: 7,
+      currentNodeKey: 'kickoff', contextVersion: 'pms-v1',
+    })
+
+    const firstAssembly = await ctx.systemPrompt.assemble()
+    const secondAssembly = await ctx.systemPrompt.assemble()
+    const contractPrompt = firstAssembly.sections.find(section => section.name === 'pms:agent-contract')
+    const secondContractPrompt = secondAssembly.sections.find(section => section.name === 'pms:agent-contract')
+    expect(contractPrompt?.text).toContain('pms-project-assistant/project-kickoff')
+    expect(contractPrompt?.text).toContain('契约版本：1.0.0')
+    expect(contractPrompt?.text).toContain('内容摘要：' + 'b'.repeat(64))
+    expect(secondContractPrompt?.text).toBe(contractPrompt?.text)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('injects the kickoff contract on the PMS project list for project creation', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response({
+        version: 'v1', tools: ['pms_project_list', 'pms_command_preview'], scopes: ['pms:project:read', 'pms:command:preview', 'pms:query:read'], pageTypes: ['project-list'],
+        queries: [], commands: [], agentContracts: [{
+          agentId: 'project_assistant', contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+          endpoint: '/integration/dsh/v1/agent-contracts/{agentId}/{contractKey}', scope: 'pms:query:read', required: true,
+        }],
+      }))
+      .mockResolvedValueOnce(response({
+        contractId: 'pms-project-assistant/project-kickoff', agentId: 'project_assistant', contractKey: 'project-kickoff',
+        workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0', required: true, locale: 'zh-CN', principalRole: 'PMS 项目经理',
+        specializedAgents: [], readCapabilities: ['项目上下文'], readToolBindings: { 'project-list': 'pms_project_list' },
+        writeCommands: ['project.create'], confirmationPolicies: { 'project.create': 'preview-and-confirm' },
+        entryConditions: ['项目列表'], inputs: ['项目基本信息'], missingInputRules: ['不得猜测'], executionSteps: ['读取状态'],
+        completionCriteria: ['项目已创建'], failureStrategies: ['鉴权失败即停止'], terminationConditions: ['用户未确认'],
+        contentSha256: 'f'.repeat(64),
+      }))
+    const ctx = new Context()
+    activeContexts.push(ctx)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(DshPms, {
+      mode: 'full', tools: ['pms_command_preview'],
+      baseUrl: 'http://pms.test', apiPrefix: '/api', accessToken: 'short-token',
+      agentId: 'project_assistant', requestTimeoutMs: 1000,
+    })
+    const store = ctx.get('pmsContextStore') as PmsContextStore
+    store.set({ pageType: 'project-list', route: '/projects' })
+    store.set('project_assistant', { pageType: 'project-list', route: '/projects' })
+    const assembly = await ctx.systemPrompt.assemble()
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(assembly.sections.map(section => section.name)).toContain('pms:agent-contract')
+  })
+
+  it('resolves the real current node key from the authoritative project snapshot', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response({
+        version: 'v1', tools: ['pms_project_get'], scopes: ['pms:project:read', 'pms:query:read'], pageTypes: [],
+        queries: [], commands: [], agentContracts: [{
+          agentId: 'project_assistant', contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+          endpoint: '/integration/dsh/v1/agent-contracts/{agentId}/{contractKey}',
+          scope: 'pms:query:read', required: true,
+        }],
+      }))
+      .mockResolvedValueOnce(response({
+        contextId: 'project-detail:22:7', pageType: 'project-detail', route: '/projects/22',
+        projectId: 22, nodeId: 7, capturedAt: '2026-09-21T00:00:00Z', version: 'pms-v1',
+        data: { currentNode: { nodeKey: 'kickoff', name: '项目立项与启动' } },
+      }))
+      .mockResolvedValueOnce(response({
+        contractId: 'pms-project-assistant/project-kickoff', agentId: 'project_assistant',
+        contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+        required: true, locale: 'zh-CN', principalRole: 'PMS 项目经理', specializedAgents: [],
+        readCapabilities: ['项目上下文'], readToolBindings: { 'project-context': 'pms_project_get' },
+        writeCommands: ['project.create'], confirmationPolicies: { 'project.create': 'preview-and-confirm' },
+        entryConditions: ['首个节点'], inputs: ['项目基本信息'], missingInputRules: ['不得猜测'],
+        executionSteps: ['读取状态'], completionCriteria: ['必填字段完整'],
+        failureStrategies: ['鉴权失败即停止'], terminationConditions: ['用户未确认'],
+        contentSha256: 'c'.repeat(64),
+      }))
+    const ctx = new Context()
+    activeContexts.push(ctx)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(ToolRuntime)
+    await ctx.plugin(DshPms, {
+      baseUrl: 'http://pms.test', apiPrefix: '/api', accessToken: 'short-token',
+      agentId: 'project_assistant', requestTimeoutMs: 1000,
+    })
+    const store = ctx.get('pmsContextStore') as PmsContextStore
+    store.set({ pageType: 'project-detail', route: '/projects/22', projectId: 22, nodeId: 7 })
+
+    const assembly = await ctx.systemPrompt.assemble()
+    expect(assembly.sections.find(section => section.name === 'pms:agent-contract')?.text)
+      .toContain('当前节点：kickoff')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
   it('keeps PMS tools and prompt out of a host-only composition', async () => {
     const ctx = new Context()
     activeContexts.push(ctx)
@@ -445,6 +813,7 @@ describe('dsh-pms tools and context', () => {
 
   it('records a refresh signal only after a successful PMS write', async () => {
     const store = new PmsContextStore()
+    markWriteReady(store, 'session-1')
     const client = {
       executeOperation: vi.fn()
         .mockResolvedValueOnce({
@@ -480,8 +849,46 @@ describe('dsh-pms tools and context', () => {
     expect(store.getRefresh('session-1', 1)).toBeUndefined()
   })
 
+  it('binds an executed write to the current PMS context and contract', async () => {
+    const store = new PmsContextStore()
+    store.set('session-bound', {
+      pageType: 'project-detail', projectId: 22, nodeId: 7, currentNodeKey: 'kickoff', contextVersion: 'pms-v7',
+    })
+    store.setContract('session-bound', {
+      status: 'ready',
+      contract: {
+        contractId: 'pms-project-assistant/project-kickoff', agentId: 'project_assistant',
+        contractKey: 'project-kickoff', workflowNodeKeys: ['kickoff'], contractVersion: '1.0.0',
+        required: true, locale: 'zh-CN', principalRole: 'PMS 项目经理', specializedAgents: [],
+        readCapabilities: ['项目上下文'], readToolBindings: { 'project-context': 'pms_project_get' },
+        writeCommands: ['project.create'], confirmationPolicies: { 'project.create': 'preview-and-confirm' },
+        entryConditions: ['首个节点'], inputs: ['项目基本信息'], missingInputRules: ['不得猜测'],
+        executionSteps: ['读取状态'], completionCriteria: ['必填字段完整'],
+        failureStrategies: ['鉴权失败即停止'], terminationConditions: ['用户未确认'],
+        contentSha256: 'e'.repeat(64),
+      },
+    })
+    const executeOperation = vi.fn().mockResolvedValue({
+      operationId: 'op-bound', status: 'SUCCEEDED', refreshScopes: [],
+    })
+    const client = { executeOperation } as unknown as PmsIntegrationClient
+
+    await executePmsOperation(client, store, { operationId: 'op-bound' }, {
+      signal: new AbortController().signal,
+      agent: { id: 'session-bound' },
+    } as never)
+
+    expect(executeOperation).toHaveBeenCalledWith(
+      'op-bound', 'pms-operation-op-bound', expect.anything(), 'session-bound', {
+        contextId: 'pms:project-detail:22:7', contextVersion: 'pms-v7',
+        contractId: 'pms-project-assistant/project-kickoff', contractVersion: '1.0.0',
+      },
+    )
+  })
+
   it('queues multiple successful PMS writes as one refresh batch', async () => {
     const store = new PmsContextStore()
+    markWriteReady(store, 'session-batch-execute')
     const client = {
       executeOperation: vi.fn()
         .mockResolvedValueOnce({ operationId: 'op-task-1', status: 'SUCCEEDED', refreshScopes: ['project-list'] })
@@ -505,6 +912,7 @@ describe('dsh-pms tools and context', () => {
 
   it('reuses a deterministic idempotency key when an execute call is retried', async () => {
     const store = new PmsContextStore()
+    markWriteReady(store, 'session-retry')
     const client = {
       executeOperation: vi.fn()
         .mockResolvedValueOnce({ operationId: 'op-retry-1', status: 'FAILED' })
@@ -519,10 +927,16 @@ describe('dsh-pms tools and context', () => {
     await executePmsOperation(client, store, { operationId: 'op-retry-1' }, exec)
 
     expect(client.executeOperation).toHaveBeenNthCalledWith(
-      1, 'op-retry-1', 'pms-operation-op-retry-1', expect.anything(), 'session-retry',
+      1, 'op-retry-1', 'pms-operation-op-retry-1', expect.anything(), 'session-retry', {
+        contextId: 'pms:global:none:none', contextVersion: 'v1',
+        contractId: 'pms-project-assistant/project-kickoff', contractVersion: '1.0.0',
+      },
     )
     expect(client.executeOperation).toHaveBeenNthCalledWith(
-      2, 'op-retry-1', 'pms-operation-op-retry-1', expect.anything(), 'session-retry',
+      2, 'op-retry-1', 'pms-operation-op-retry-1', expect.anything(), 'session-retry', {
+        contextId: 'pms:global:none:none', contextVersion: 'v1',
+        contractId: 'pms-project-assistant/project-kickoff', contractVersion: '1.0.0',
+      },
     )
   })
 
