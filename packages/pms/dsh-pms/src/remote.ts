@@ -73,6 +73,7 @@ function normalizeLocator(locator: PmsContextLocator): PmsContextLocator {
     route: locator.route,
     ...(locator.projectId === undefined ? {} : { projectId: locator.projectId }),
     ...(locator.nodeId === undefined ? {} : { nodeId: locator.nodeId }),
+    ...(locator.currentNodeKey === undefined ? {} : { currentNodeKey: locator.currentNodeKey }),
     ...(locator.contextVersion === undefined ? {} : { contextVersion: locator.contextVersion }),
   }
 }

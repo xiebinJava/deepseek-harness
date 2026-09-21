@@ -1,10 +1,11 @@
-import type { PmsContextLocator, PmsRefreshSignal } from '../types.ts'
+import type { PmsAgentContractState, PmsContextLocator, PmsRefreshSignal } from '../types.ts'
 
 /** Per-DSH-session PMS locator; it is not a source of business facts. */
 export class PmsContextStore {
   private readonly contexts = new Map<string, PmsContextLocator>()
   private readonly refreshes = new Map<string, PmsRefreshSignal>()
   private readonly pendingRefreshes = new Map<string, PendingRefresh>()
+  private readonly contracts = new Map<string, PmsAgentContractState>()
 
   get(sessionId?: string): PmsContextLocator | undefined {
     const current = this.contexts.get(sessionKey(sessionId))
@@ -25,6 +26,19 @@ export class PmsContextStore {
     this.contexts.delete(key)
     this.refreshes.delete(key)
     this.pendingRefreshes.delete(key)
+    this.contracts.delete(key)
+  }
+
+  getContract(sessionId?: string): PmsAgentContractState | undefined {
+    return this.contracts.get(sessionKey(sessionId))
+  }
+
+  setContract(sessionId: string | undefined, state: PmsAgentContractState): void {
+    this.contracts.set(sessionKey(sessionId), state)
+  }
+
+  clearContract(sessionId?: string): void {
+    this.contracts.delete(sessionKey(sessionId))
   }
 
   /** Queue a successful write until the current Agent turn is ready to close. */

@@ -14,6 +14,41 @@ export interface PmsCapabilities {
   pageTypes: string[]
   queries?: PmsQueryCapability[]
   commands?: PmsCommandCapability[]
+  agentContracts?: PmsAgentContractCapability[]
+}
+
+export interface PmsAgentContractCapability {
+  agentId: string
+  contractKey: string
+  workflowNodeKeys: string[]
+  contractVersion: string
+  endpoint: string
+  scope: string
+  required: boolean
+}
+
+export interface PmsAgentContract extends PmsJsonObject {
+  contractId: string
+  agentId: string
+  contractKey: string
+  workflowNodeKeys: string[]
+  contractVersion: string
+  required: boolean
+  locale: string
+  principalRole: string
+  specializedAgents: string[]
+  readCapabilities: string[]
+  readToolBindings: PmsJsonObject
+  writeCommands: string[]
+  confirmationPolicies: PmsJsonObject
+  entryConditions: string[]
+  inputs: string[]
+  missingInputRules: string[]
+  executionSteps: string[]
+  completionCriteria: string[]
+  failureStrategies: string[]
+  terminationConditions: string[]
+  contentSha256: string
 }
 
 export interface PmsQueryCapability {
@@ -43,6 +78,8 @@ export interface PmsCommandPreviewRequest {
   arguments: PmsJsonObject
   contextId: string
   contextVersion: string
+  contractId?: string
+  contractVersion?: string
 }
 
 export interface PmsCommandPreview extends PmsJsonObject {
@@ -61,6 +98,13 @@ export interface PmsCommandResult extends PmsJsonObject {
   message?: string
   data?: PmsJsonObject
   refreshScopes?: PmsJson[]
+}
+
+export interface PmsOperationBinding {
+  contextId: string
+  contextVersion: string
+  contractId: string
+  contractVersion: string
 }
 
 /** Host-side signal consumed by the DSH PMS iframe after a successful write. */
@@ -126,7 +170,16 @@ export interface PmsContextLocator {
   route?: string
   projectId?: number
   nodeId?: number
+  currentNodeKey?: string
   contextVersion?: string
+}
+
+export interface PmsAgentContractState {
+  status: 'ready' | 'unavailable'
+  contract?: PmsAgentContract
+  loadedAt?: string
+  errorCode?: string
+  errorMessage?: string
 }
 
 export type PmsJson = null | boolean | number | string | PmsJson[] | PmsJsonObject

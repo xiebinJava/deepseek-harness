@@ -1,10 +1,12 @@
 import type {
   PmsApiEnvelope,
+  PmsAgentContract,
   PmsCapabilities,
   PmsContextSnapshot,
   PmsCommandPreview,
   PmsCommandPreviewRequest,
   PmsCommandResult,
+  PmsOperationBinding,
   PmsProjectListQuery,
   PmsJsonObject,
   PmsQueryRequest,
@@ -69,6 +71,8 @@ export class PmsIntegrationClient {
   private exchangePromises = new Map<string, Promise<string>>()
   private capabilitiesSnapshots = new Map<string, PmsCapabilities>()
   private capabilitiesPromises = new Map<string, Promise<PmsCapabilities>>()
+  private agentContractSnapshots = new Map<string, PmsAgentContract>()
+  private agentContractPromises = new Map<string, Promise<PmsAgentContract>>()
 
   constructor(options: PmsIntegrationClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/+$/u, '')
@@ -78,7 +82,9 @@ export class PmsIntegrationClient {
     this.serviceKey = options.serviceKey?.trim() ?? ''
     this.dshSessionId = options.dshSessionId?.trim() ?? ''
     this.agentId = options.agentId?.trim() ?? ''
-    this.allowedTools = options.allowedTools === undefined ? undefined : [...new Set(options.allowedTools.map(tool => tool.trim()).filter(Boolean))]
+    this.allowedTools = options.allowedTools === undefined
+      ? undefined
+      : [...new Set(options.allowedTools.map(tool => tool.trim()).filter(Boolean))]
     this.allowLegacyUserTokenExchange = options.allowLegacyUserTokenExchange ?? false
     this.agentVersion = options.agentVersion?.trim() ?? ''
     this.workspaceType = options.workspaceType?.trim() ?? ''
@@ -118,11 +124,55 @@ export class PmsIntegrationClient {
     })
     scoped.exchangedTokens = this.exchangedTokens
     scoped.exchangePromises = this.exchangePromises
+    scoped.agentContractSnapshots = this.agentContractSnapshots
+    scoped.agentContractPromises = this.agentContractPromises
     return scoped
   }
 
   capabilities(signal?: AbortSignal, sessionId?: string): Promise<PmsCapabilities> {
     return this.ensureCapabilities(signal, sessionId)
+  }
+
+  getAgentContract(
+    agentId: string,
+    contractKey: string,
+    signal?: AbortSignal,
+    sessionId?: string,
+  ): Promise<PmsAgentContract> {
+    const resolvedAgentId = agentId.trim()
+    const resolvedContractKey = contractKey.trim()
+    if (resolvedAgentId === '' || resolvedContractKey === '') throw new Error('dsh-pms: Agent contract identity is required')
+    if (this.agentId !== '' && this.agentId !== resolvedAgentId) throw capabilityForbidden()
+    const key = `${this.sessionKey(sessionId)}:${resolvedAgentId}:${resolvedContractKey}`
+    const pending = this.agentContractPromises.get(key)
+    if (pending !== undefined) return pending
+    const request = this.ensureCapabilities(signal, sessionId)
+      .then((capabilities) => {
+        const descriptor = capabilities.agentContracts?.find(item =>
+          item.agentId === resolvedAgentId && item.contractKey === resolvedContractKey)
+        if (descriptor === undefined) throw capabilityForbidden()
+        const cached = this.agentContractSnapshots.get(key)
+        if (cached !== undefined && cached.contractVersion === descriptor.contractVersion) {
+          validateContractIdentity(cached, resolvedAgentId, resolvedContractKey, descriptor.contractVersion)
+          return cached
+        }
+        return this.get<PmsAgentContract>(
+          `/integration/dsh/v1/agent-contracts/${encodeURIComponent(resolvedAgentId)}/${encodeURIComponent(resolvedContractKey)}`,
+          undefined,
+          signal,
+          sessionId,
+        ).then((contract) => {
+          validateContractIdentity(contract, resolvedAgentId, resolvedContractKey, descriptor.contractVersion)
+          return contract
+        })
+      })
+      .then((contract) => {
+        this.agentContractSnapshots.set(key, contract)
+        return contract
+      })
+    const tracked = request.finally(() => this.agentContractPromises.delete(key))
+    this.agentContractPromises.set(key, tracked)
+    return tracked
   }
 
   projects(query: PmsProjectListQuery = {}, signal?: AbortSignal, sessionId?: string): Promise<PmsContextSnapshot> {
@@ -184,13 +234,14 @@ export class PmsIntegrationClient {
     idempotencyKey: string,
     signal?: AbortSignal,
     sessionId?: string,
+    binding?: PmsOperationBinding,
   ): Promise<PmsCommandResult> {
     if (operationId.trim() === '') throw new Error('dsh-pms: operationId is required')
     if (idempotencyKey.trim() === '') throw new Error('dsh-pms: idempotencyKey is required')
     return this.withCapability('pms_command_execute', signal, sessionId)
       .then(() => this.post<PmsCommandResult>(
         `/integration/dsh/v1/operations/${encodeURIComponent(operationId)}/execute`,
-        { idempotencyKey },
+        { idempotencyKey, ...(binding ?? {}) },
         signal,
         sessionId,
       ))
@@ -226,6 +277,7 @@ export class PmsIntegrationClient {
       const timer = setTimeout(() => { controller.abort(new Error('PMS request timeout')) }, this.requestTimeoutMs)
       const onAbort = () => { controller.abort(signal?.reason) }
       signal?.addEventListener('abort', onAbort, { once: true })
+      const operationId = operationIdOf(path)
       try {
         const response = await this.fetchImpl(url, {
           method,
@@ -240,7 +292,7 @@ export class PmsIntegrationClient {
             ...(this.agentVersion === '' ? {} : { 'X-DSH-Agent-Version': this.agentVersion }),
             ...(this.workspaceType === '' ? {} : { 'X-DSH-Workspace': this.workspaceType }),
             'X-DSH-Tool': toolName(path),
-            ...(path.includes('/operations/') ? { 'X-DSH-Operation-Id': decodeURIComponent(path.split('/operations/')[1]!.split('/')[0]!) } : {}),
+            ...(operationId === undefined ? {} : { 'X-DSH-Operation-Id': operationId }),
           },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         })
@@ -584,6 +636,7 @@ function effectiveCapabilities(
   const agentTools = allowedTools === undefined ? undefined : new Set(allowedTools)
   const queries = capabilities.queries?.filter(query => query.scopes.every(scope => serverScopes.has(scope)))
   const commands = capabilities.commands?.filter(command => command.scopes.every(scope => serverScopes.has(scope)))
+  const agentContracts = capabilities.agentContracts?.filter(contract => serverScopes.has(contract.scope))
   const hasAgentTool = (tool: string): boolean => agentTools === undefined || agentTools.has(tool)
   const hasStaticScope = (tool: string): boolean => {
     const scope = TOOL_SCOPES[tool]
@@ -607,12 +660,14 @@ function effectiveCapabilities(
   }
   for (const query of queries ?? []) for (const scope of query.scopes) effectiveScopes.add(scope)
   for (const command of commands ?? []) for (const scope of command.scopes) effectiveScopes.add(scope)
+  for (const contract of agentContracts ?? []) effectiveScopes.add(contract.scope)
   return {
     ...capabilities,
     tools,
     scopes: capabilities.scopes.filter(scope => effectiveScopes.has(scope)),
     ...(queries === undefined ? {} : { queries }),
     ...(commands === undefined ? {} : { commands }),
+    ...(agentContracts === undefined ? {} : { agentContracts }),
   }
 }
 
@@ -623,13 +678,43 @@ function capabilityForbidden(): PmsIntegrationError {
   })
 }
 
+function validateContractIdentity(
+  contract: PmsAgentContract,
+  agentId: string,
+  contractKey: string,
+  contractVersion: string,
+): void {
+  if (contract.agentId !== agentId
+    || contract.contractKey !== contractKey
+    || contract.contractVersion !== contractVersion) {
+    throw contractIdentityMismatch()
+  }
+}
+
+function contractIdentityMismatch(): PmsIntegrationError {
+  return new PmsIntegrationError('PMS Agent contract identity mismatch', {
+    status: 502,
+    code: 'PMS_AGENT_CONTRACT_MISMATCH',
+  })
+}
+
 function toolName(path: string): string {
   if (path.endsWith('/capabilities')) return 'pms_capabilities'
   if (path.endsWith('/projects')) return 'pms_project_list'
   if (/\/projects\/[^/]+\/tasks$/u.test(path)) return 'pms_task_list'
   if (/\/projects\/[^/]+$/u.test(path)) return 'pms_project_get'
   if (path.endsWith('/query')) return 'pms_query'
+  if (/\/agent-contracts\/[^/]+\/[^/]+$/u.test(path)) return 'pms_agent_contract'
   if (path.endsWith('/commands/preview')) return 'pms_command_preview'
   if (path.includes('/operations/')) return 'pms_command_execute'
   return 'pms_unknown'
+}
+
+/** Extract the operation id from `/operations/{id}/...`, without assuming the segment exists. */
+function operationIdOf(path: string): string | undefined {
+  const marker = '/operations/'
+  const start = path.indexOf(marker)
+  if (start < 0) return undefined
+  const segment = path.slice(start + marker.length).split('/')[0]
+  return segment === undefined || segment === '' ? undefined : decodeURIComponent(segment)
 }
