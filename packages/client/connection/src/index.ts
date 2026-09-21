@@ -149,11 +149,13 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
       },
     }
     webCtx.effect(() => webCtx.webServer.register(route), 'client-connection: /api route')
-    webCtx.effect(() => webCtx.webServer.register({
-      kind: 'exact',
-      path: '/auth/oidc/callback',
-      handler: (req, res) => browserAuth.handleOidcCallback(req, res),
-    }), 'client-connection: OIDC callback')
+    if (browserAuth.oidcEnabled) {
+      webCtx.effect(() => webCtx.webServer.register({
+        kind: 'exact',
+        path: '/auth/oidc/callback',
+        handler: (req, res) => browserAuth.handleOidcCallback(req, res),
+      }), 'client-connection: OIDC callback')
+    }
   })
   ctx.inject(['attachments'], (attachmentCtx) => {
     assertImageBodyCapacity(attachmentCtx, maxRequestBodyBytes)

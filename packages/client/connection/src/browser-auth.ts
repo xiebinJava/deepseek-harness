@@ -242,6 +242,15 @@ export class BrowserAuth {
   }
 
   /**
+   * Whether an OIDC provider is configured, so the host registers the
+   * `/auth/oidc/callback` route only for deployments that can complete a
+   * browser login.
+   */
+  get oidcEnabled(): boolean {
+    return this.oidc !== undefined
+  }
+
+  /**
    * Add this process's launch token to the ordinary application root URL.
    * @param baseUrl - canonical browser origin without credentials.
    * @returns root URL carrying the process token as its sole authentication input.
@@ -531,7 +540,7 @@ function trimSlash(value: string): string {
   return value.endsWith('/') ? value.slice(0, -1) : value
 }
 
-function parseJsonPart(value: string): Record<string, any> {
+function parseJsonPart(value: string): Record<string, unknown> {
   try {
     const parsed: unknown = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
     if (!isRecord(parsed)) throw new Error('not an object')

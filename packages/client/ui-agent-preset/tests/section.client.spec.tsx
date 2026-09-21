@@ -13,7 +13,6 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { AgentPresetSection } from '../src/client/AgentPresetSection.tsx'
 import type { AgentPresetSectionProps } from '../src/client/AgentPresetSection.tsx'
 import type { AgentPresetSectionState, CopyDraft } from '../src/client/section-store.ts'
-import type { AgentPresetDraft } from '@deepseek-ai/dsh-agent-presets'
 import { en } from '../src/client/locales.ts'
 
 afterEach(cleanup)
@@ -31,7 +30,6 @@ const READY: AgentPresetSectionState = {
   ],
   copy: null,
   view: null,
-  editor: null,
   pendingDelete: null,
   deleting: false,
   revealedPaths: {},
@@ -54,13 +52,6 @@ function renderSection(
     ...options.creator === false ? {} : { startCreatorDraft: vi.fn() },
     view: vi.fn(() => Promise.resolve()),
     closeView: vi.fn(),
-    beginEdit: vi.fn(() => Promise.resolve()),
-    closeEditor: vi.fn(),
-    setEditorPrompt: vi.fn(),
-    setEditorBinding: vi.fn(),
-    saveEditorDraft: vi.fn(() => Promise.resolve()),
-    testEditorDraft: vi.fn(() => Promise.resolve()),
-    publishEditorDraft: vi.fn(() => Promise.resolve()),
     beginCopy: vi.fn(),
     cancelCopy: vi.fn(),
     setCopyId: vi.fn(),
@@ -202,57 +193,6 @@ describe('the preset list', () => {
     const mine = rowFor('mine')
     expect(within(mine).getByRole('button', { name: `${en.openLocation}: mine` })).toBeTruthy()
     expect(within(mine).queryByRole('button', { name: `${en.view}: mine` })).toBeNull()
-  })
-
-  it('offers Edit Agent on a custom row and routes the edit action', () => {
-    const actions = renderSection()
-
-    const mine = rowFor('mine')
-    fireEvent.click(within(mine).getByRole('button', { name: `${en.editAgent}: mine` }))
-
-    expect(actions.beginEdit).toHaveBeenCalledWith('mine')
-  })
-
-  it('renders the two prompt halves and registered binding controls', () => {
-    const actions = renderSection({
-      editor: {
-        id: 'mine',
-        title: '我的 PMS Agent',
-        draft: {
-          agentPreset: 'mine',
-          revision: 'draft-r1',
-          version: 0,
-          identityPrompt: '我是项目助手。',
-          behaviorPrompt: '先查数据，再回答。',
-          selectedSkills: ['pms-context'],
-          selectedPlugins: [],
-          workspaceBindings: ['pms'],
-          availableSkills: [{ id: 'pms-context', label: 'PMS 上下文读取' }],
-          availablePlugins: [{ id: 'pms', label: 'PMS 能力' }],
-          availableWorkspaces: [{ id: 'pms', label: 'PMS 业务工作区' }],
-          history: [],
-        } satisfies AgentPresetDraft,
-        saving: false,
-        publishing: false,
-        testing: false,
-        dirty: false,
-        error: null,
-        testResult: null,
-      },
-    })
-
-    const identity = screen.getByLabelText(en.identityPrompt)
-    const behavior = screen.getByLabelText(en.behaviorPrompt)
-    expect(identity).toHaveProperty('value', '我是项目助手。')
-    expect(behavior).toHaveProperty('value', '先查数据，再回答。')
-
-    fireEvent.change(identity, { target: { value: '我是新的项目助手。' } })
-    fireEvent.click(screen.getByLabelText('PMS 能力'))
-
-    expect(actions.setEditorPrompt).toHaveBeenCalledWith('identityPrompt', '我是新的项目助手。')
-    expect(actions.setEditorBinding).toHaveBeenCalledWith('selectedPlugins', 'pms', true)
-    fireEvent.click(screen.getByRole('button', { name: en.testDraft }))
-    expect(actions.testEditorDraft).toHaveBeenCalledTimes(1)
   })
 
   it('offers Delete only for a locally authored preset', () => {
