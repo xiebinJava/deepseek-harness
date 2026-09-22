@@ -167,6 +167,9 @@ function declareConversation(slots: SlotRegistry): () => void {
     name: 'conversation',
     children: {
       'conversation.hero.agentPreset': { kind: 'single', scope: 'session-maybe' },
+      // The composer seat: a blank-but-bound session shows the picker beside
+      // the model seat, because the hero chip is only rendered with no session.
+      'conversation.input.right': { kind: 'list', scope: 'session' },
       'conversation.session.header.actions': { kind: 'list', scope: 'session' },
     },
   } as never, () => null)

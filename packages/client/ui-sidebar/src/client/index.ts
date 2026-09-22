@@ -15,6 +15,7 @@ import type { SidebarPanelMetadata, SidebarRootInjected } from './contract/slots
 import { HeaderLeadingControls } from './HeaderLeadingControls.tsx'
 import { SidebarRoot } from './SidebarRoot.tsx'
 import { en, zh, type SidebarKey } from './locales.ts'
+import { SidebarSystemsRegistry, type SidebarSystemEntry } from './systems.ts'
 
 export type {
   SidebarBrandMarkOwnerProps, SidebarBrandNameOwnerProps, SidebarFooterActionOwnerProps,
@@ -22,6 +23,7 @@ export type {
   SidebarRootComponentProps, SidebarRootInjected, SidebarSectionOwnerProps, SidebarSettingsOwnerProps,
 } from './contract/slots.ts'
 export type { SidebarKey } from './locales.ts'
+export { SidebarSystemsRegistry, type SidebarSystemEntry } from './systems.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -35,6 +37,13 @@ const NS = 'sidebar'
 
 interface WorkspaceNavigation {
   startSession(workspaceId?: Parameters<SidebarRootInjected['startSession']>[0]): void
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** System launchers rendered under the global panel rows. */
+    sidebarSystems: SidebarSystemsRegistry
+  }
 }
 
 /** Services required by the sidebar plugin. */
@@ -63,13 +72,20 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.slots.subscribe('sidebar.panellist', syncPanels), 'ui-sidebar: panel entries')
   ctx.effect(() => ctx.locale.subscribe(syncPanels), 'ui-sidebar: panel labels')
 
+  // Systems are contributed by other plugins; the shell only renders them.
+  const systems = new SidebarSystemsRegistry()
+  ctx.provide('sidebarSystems', systems)
+  const systemEntries = createSnapshotStore<readonly SidebarSystemEntry[]>([])
+  const syncSystems = (): void => { systemEntries.set(systems.list()) }
+  ctx.effect(() => { syncSystems(); return systems.subscribe(syncSystems) }, 'ui-sidebar: system entries')
+
   const injectProps = (): SidebarRootInjected => ({
     // The shell's New Session button rides the Workspace UI's shared action
     // (current Session Workspace, then recent Workspace).
     startSession: (workspaceId) => { workspaceNavigation.startSession(workspaceId) },
     toggleSidebar: () => { ctx.layout.toggleSidebar() },
     selectPanel: (id) => { ctx.layout.selectPanel(id) },
-    hooks: { panels },
+    hooks: { panels, systems: systemEntries },
   })
   ctx.slots.inject('sidebar', () => ctx.slots.register({
     name: 'sidebar',

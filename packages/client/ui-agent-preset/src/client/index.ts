@@ -147,6 +147,16 @@ export function apply(ctx: ClientContext): void {
     const labelInjected = (): AgentPresetLabelInjected => ({
       hooks: { agentPresets: controller.store },
       load: () => controller.load(),
+      // A session's composition is fixed once it starts, so the only honest
+      // follow-up to "this session runs preset X" is starting the next one with
+      // X. Staging into the blank seat and letting the list-change applier
+      // consume it is the same path the settings creator entry uses.
+      startWithPreset: (id: string) => {
+        const seat = mainBlankSeat(scope) ?? unboundSeat
+        seat.stage(id, false)
+        scope.uiWorkspace.startSession()
+        void seat.apply()
+      },
     })
 
     scope.effect(() => {
@@ -162,6 +172,16 @@ export function apply(ctx: ClientContext): void {
         locale: 'settings.agentPreset',
         inject: seatInjected,
       }, AgentPresetSeat)
+      // A blank-but-bound session (what 新会话 creates) shows the selector in
+      // the composer footer beside the model seat; the hero slot is reserved for
+      // the true cold start before any session exists.
+      const composerChip = scope.slots.register({
+        name: 'conversation.input.right',
+        id: 'agent-preset',
+        order: -10,
+        locale: 'settings.agentPreset',
+        inject: (sessionId: SessionId) => ({ ...seatInjected(sessionId), requireBlank: true }),
+      }, AgentPresetSeat)
       const label = scope.slots.register({
         name: 'conversation.session.header.actions',
         id: 'agent-preset',
@@ -173,6 +193,7 @@ export function apply(ctx: ClientContext): void {
       return () => {
         creatorDraft = undefined
         chip()
+        composerChip()
         label()
       }
     }, 'ui-agent-preset: new-session chip and header label')

@@ -1,20 +1,25 @@
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import type { ReactNode } from 'react'
+import { createElement, type ReactNode } from 'react'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import { IconBrowseOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarRightTabDefinition } from '@deepseek-ai/dsh-client-ui-sidebar-right/client'
-import { PmsOpenAction } from './PmsOpenAction.tsx'
 import { PmsWorkspace, type PmsContextBridge, type PmsWorkspaceProps } from './PmsWorkspace.tsx'
 import type { PmsAuthCodeRecord } from './pms-auth-bridge.ts'
 import { resolvePmsWorkspaceUrl } from './workspace-url.ts'
 
 export const PMS_WORKSPACE_KIND = 'pms'
 export const PMS_WORKSPACE_ID = '@deepseek-ai/dsh-client-ui-pms-workspace'
-export const inject = ['slots', 'sidebarRight', 'sidebarRightTabs', 'remote', 'remote.pmsContext']
+export const inject = [
+  'slots', 'sidebarRight', 'sidebarRightTabs', 'remote', 'remote.pmsContext',
+  // Provided by the sidebar shell: the 系统 group this plugin registers its
+  // launcher into. Cordis only resolves an injected service by name.
+  'sidebarSystems',
+]
 
 export function pmsWorkspaceDefinition(): SidebarRightTabDefinition {
   return {
@@ -50,10 +55,20 @@ export function apply(ctx: ClientContext): void {
     name: 'sidebar.right.pane.tab',
     key: PMS_WORKSPACE_ID,
   }, PmsWorkspaceWithBridge)), 'ui-pms-workspace: body')
-  ctx.effect(() => ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
-    name: 'conversation.session.header.utilities',
-    id: 'pms-workspace',
-    order: -20,
-    inject: () => ({ open: () => { ctx.sidebarRight.openTab(PMS_WORKSPACE_KIND) } }),
-  }, PmsOpenAction)), 'ui-pms-workspace: open action')
+  // The launcher lives in the sidebar's 系统 group (below 插件), not in the
+  // conversation header: a system is a deployment-wide entry, not a session
+  // control. Another business app (OMS, ...) registers the same way.
+  ctx.effect(() => {
+    // Defensive: a shell built before the systems seam simply shows no launcher
+    // instead of failing this plugin's activation.
+    const systems = ctx.sidebarSystems
+    if (systems === undefined) return () => undefined
+    return systems.register({
+      id: PMS_WORKSPACE_KIND,
+      label: 'PMS',
+      order: 10,
+      icon: ({ size }) => createElement(IconBrowseOutline16, { size }),
+      onSelect: () => { ctx.sidebarRight.openTab(PMS_WORKSPACE_KIND) },
+    })
+  }, 'ui-pms-workspace: sidebar system entry')
 }

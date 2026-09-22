@@ -137,3 +137,15 @@
   color: var(--dsw-alias-label-caption);
   white-space: normal;
 }
+
+/* A refused roster read keeps the picker's seat in layout but names the reason. */
+.error {
+  display: inline-block;
+  max-width: 420px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--dsw-alias-fill-tsp-secondary);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}

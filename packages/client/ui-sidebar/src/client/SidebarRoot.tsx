@@ -92,11 +92,13 @@ export function SidebarRoot({
   toggleSidebar,
   selectPanel,
   usePanels,
+  useSystems,
   usePanelInfo,
   t,
   renderSlot,
 }: SidebarRootComponentProps) {
   const panels = usePanels(snapshot => snapshot)
+  const systemEntries = useSystems(snapshot => snapshot)
   // Wide content stays mounted while the collapse animates (fading via
   // .collapsed .wide), unmounts at settle, and remounts right away on expand.
   const [settled, setSettled] = useState(collapsed)
@@ -262,6 +264,30 @@ export function SidebarRoot({
               selectPanel={selectPanel}
               renderSlot={renderSlot}
             />
+          ))}
+        </nav>
+      )}
+
+      {/* Business systems this deployment is wired to (PMS, OMS, ...). The shell
+          draws the rows; each system contributes a label, icon and action. */}
+      {systemEntries.length > 0 && (
+        <nav className={css.panelList} aria-label={t('systems.label')} data-sidebar-systems>
+          {wide && <div className={css.systemsLabel}>{t('systems.label')}</div>}
+          {systemEntries.map(entry => (
+            <Tooltip key={entry.id} label={entry.label} delayMs={500} disabled={wide}>
+              <button
+                type="button"
+                className={css.panelRow}
+                aria-label={entry.label}
+                onClick={entry.onSelect}
+                data-system-row={entry.id}
+              >
+                <span className={css.panelGlyph} aria-hidden="true">
+                  {entry.icon({ size: wide ? 16 : 18 })}
+                </span>
+                {wide && <span className={clsx(css.panelTitle, css.wide)}>{entry.label}</span>}
+              </button>
+            </Tooltip>
           ))}
         </nav>
       )}

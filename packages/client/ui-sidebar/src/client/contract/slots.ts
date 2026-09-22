@@ -10,6 +10,7 @@
 import type { InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
+import type { SidebarSystemEntry } from '../systems.ts'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -125,7 +126,11 @@ export type SidebarRootInjected = {
   /** Select the global panel addressed by a sidebar row. */
   selectPanel: (id: MainPanelId) => void
   /** Private reactive sources bound to framework selector hooks. */
-  hooks: { panels: ObservableSnapshot<readonly SidebarPanelMetadata[]> }
+  hooks: {
+    panels: ObservableSnapshot<readonly SidebarPanelMetadata[]>
+    /** Registered system launchers, in row order. */
+    systems: ObservableSnapshot<readonly SidebarSystemEntry[]>
+  }
 }
 
 /**

@@ -74,6 +74,13 @@ function introStaggerMs(count: number): number {
 /** Full component props. */
 export type AgentPresetSeatProps =
   PropsRuntime<'conversation.hero.agentPreset'>
+  & {
+    /**
+     * Set by the composer seat: the picker only makes sense while the session
+     * has not started, because a started conversation's composition is fixed.
+     */
+    requireBlank?: boolean
+  }
   & PropsLocale<'settings.agentPreset'>
   & InjectFace<AgentPresetSeatInjected>
 
@@ -83,7 +90,7 @@ export type AgentPresetSeatProps =
  * @returns the chip, or null when the deployment composes no presets.
  */
 export function AgentPresetSeat({
-  sessionId, useSessionRetainInfo, load, select, introduced, useAgentPresetSeat, t,
+  sessionId, useSessionRetainInfo, load, select, introduced, useAgentPresetSeat, requireBlank, t,
 }: AgentPresetSeatProps) {
   const state = useAgentPresetSeat(snapshot => snapshot)
   const main = useSessionRetainInfo(info => sessionId === undefined
@@ -136,7 +143,33 @@ export function AgentPresetSeat({
 
   // Nothing to choose between: the deployment composes no presets and every
   // session shares the host composition.
-  if (!main || !state.showPicker || !ready) return null
+  // TEMPORARY DIAGNOSTIC (remove once the composer seat is confirmed): the
+  // composer seat says why it cannot offer a pick instead of hiding in silence.
+  if (requireBlank === true && !state.showPicker) {
+    return (
+      <span className={css.error} data-agent-preset-diag>
+        {`Agent 选择器未启用：选项 ${String(state.options.length)}`
+          + `，显示开关 ${String(state.showPicker)}`
+          + `，当前 ${state.current === '' ? '空' : state.current}`
+          + `，未开始 ${String(state.blank)}`
+          + (state.error === null ? '' : `，错误：${state.error}`)}
+      </span>
+    )
+  }
+  if (!main) return null
+  // The composer seat exists for a brand-new session only: once the
+  // conversation starts its preset is fixed, so offering the picker would be a
+  // control the host refuses.
+  if (requireBlank === true && !state.blank) return null
+  // A refused roster read used to hide the picker silently, which reads as "the
+  // product has no agent choice". Name the reason instead, so the owner can act
+  // (usually: enable mode selection in Settings ▸ Agent presets).
+  if (!state.showPicker) {
+    return state.error === null ? null : (
+      <span className={css.error} title={state.error} data-agent-preset-error>{state.error}</span>
+    )
+  }
+  if (!ready) return null
 
   // One wrapper span: the chip is a flex row with a gap, so loose character
   // spans would each pick up the gap between them.

@@ -9,6 +9,11 @@
   height: 22px;
   border-radius: 6px;
   background: var(--dsw-alias-fill-tsp-secondary);
+  /* A button when the label carries the follow-up action; reset the UA chrome so
+     it stays visually identical to the read-only chip. */
+  border: none;
+  cursor: pointer;
+  font: inherit;
   font-size: 12px;
   line-height: 22px;
   color: var(--dsw-alias-label-secondary);

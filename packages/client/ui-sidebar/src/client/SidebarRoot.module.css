@@ -436,6 +436,14 @@
 
 /* Panel entries share the New Session bar's 12px radius and 2px inset, the
    session rows' hover/selected surface, and the primary ink. */
+.systemsLabel {
+  padding: 10px 12px 4px;
+  color: var(--dsh-text-tertiary, #8b8b8b);
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+}
+
 .panelRow {
   display: flex;
   align-items: center;

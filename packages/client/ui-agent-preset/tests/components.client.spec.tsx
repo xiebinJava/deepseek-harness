@@ -30,6 +30,7 @@ const ROSTER_READY: AgentPresetSettingsState = {
 
 const SEAT_READY: AgentPresetSeatState = {
   showPicker: true,
+  blank: true,
   current: 'standard',
   options: [
     { id: 'standard', trust: 'system', name: '标准模式', description: '完整的编码 agent。' },
@@ -320,13 +321,38 @@ describe('the session-header label', () => {
     await waitFor(() => { expect(load).toHaveBeenCalledTimes(1) })
     // A control here would promise a switch the host refuses outright.
     expect(screen.queryByRole('button')).toBeNull()
-    expect(screen.getByTitle(en.presetStandardDescription).textContent).toBe(en.presetStandardName)
+    // The tooltip carries both the display name and the id the preset is addressed by.
+    const named = screen.getByText(en.presetStandardName)
+    expect(named.getAttribute('title')).toContain('（standard）')
+    expect(named.getAttribute('data-agent-preset')).toBe('standard')
+  })
+
+  it('starts a new session under the same preset when the host wires the action', () => {
+    const store = createSnapshotStore<AgentPresetSettingsState>({
+      ...ROSTER_READY, options: SEAT_READY.options,
+    })
+    const sessions = createSnapshotStore({
+      byId: { s1: { blank: false, projectionValues: { agentPreset: 'standard' } } },
+    })
+    const startWithPreset = vi.fn()
+    render(<AgentPresetLabel {...({
+      load: () => Promise.resolve(),
+      sessionId: 's1',
+      startWithPreset,
+      useSessions: bindSnapshotSelector(sessions),
+      useAgentPresets: bindSnapshotSelector(store),
+      t: (key: keyof typeof en) => en[key],
+    } as unknown as AgentPresetLabelProps)} />)
+
+    // The session's own composition is never switched; the click starts the next one.
+    fireEvent.click(screen.getByRole('button'))
+    expect(startWithPreset).toHaveBeenCalledWith('standard')
   })
 
   it('falls back to the id, and to the generic hint, when metadata is absent', () => {
     renderLabel({ blank: true, projectionValues: { agentPreset: 'mine' } })
 
-    expect(screen.getByTitle(en.headerHint).textContent).toBe('mine')
+    expect(screen.getByTitle('mine').textContent).toBe('mine')
   })
 
   it('shows the id until the roster resolves it', () => {
@@ -337,7 +363,7 @@ describe('the session-header label', () => {
 
     // The session's own summary is the authority on which preset it runs; the
     // roster only supplies the display name, and its arrival is a later frame.
-    expect(screen.getByTitle(en.headerHint).textContent).toBe('standard')
+    expect(screen.getByTitle('standard').textContent).toBe('standard')
   })
 
   it('renders nothing, and reads no roster, when the session records no preset', async () => {

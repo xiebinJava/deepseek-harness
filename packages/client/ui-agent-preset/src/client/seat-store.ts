@@ -23,6 +23,8 @@ import type { AgentPresetOption } from './settings-store.ts'
 export interface AgentPresetSeatState {
   /** Whether the new-session surface exposes preset selection. */
   showPicker: boolean
+  /** Whether the session the chip sits in has not started yet. */
+  blank: boolean
   /** Presets the deployment supplies; empty means the chip renders nothing. */
   options: readonly AgentPresetOption[]
   /** The staged choice, empty until the roster loads. */
@@ -39,7 +41,7 @@ export interface AgentPresetSeatState {
 }
 
 const INITIAL: AgentPresetSeatState = {
-  showPicker: false, options: [], current: '', error: null, busy: false, introduce: false,
+  showPicker: false, blank: true, options: [], current: '', error: null, busy: false, introduce: false,
 }
 
 /** Mutable one-shot preset choice shared across Provider-bound seat controllers. */
@@ -99,6 +101,7 @@ export class AgentPresetSeatController {
     const session = this.currentSession()
     this.set({
       showPicker: modeSelectionEnabled,
+      blank: session === undefined ? true : session.blank,
       options: presetOptions(presets),
       // Staged pick first, then the composition the current session
       // already carries, then the Host-effective default. The middle term is
