@@ -43,7 +43,13 @@ export {
   serverResponseSchema,
 } from './rpc-schema.ts'
 export { HostConnectionService } from './rpc-host.ts'
-export type { BrowserAuthOidcConfig } from './browser-auth.ts'
+export type { BrowserAuthOidcConfig, BrowserOidcIdentity } from './browser-auth.ts'
+
+/** Host-side reader for the SSO identity verified during browser login. */
+export interface BrowserIdentityService {
+  identity(): import('./browser-auth.ts').BrowserOidcIdentity | undefined
+  idToken(): string | undefined
+}
 
 export { API_PATH } from './api-path.ts'
 
@@ -51,6 +57,14 @@ export { API_PATH } from './api-path.ts'
 export const name = 'client-connection'
 
 declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /**
+     * Identity verified by the browser OIDC login, when the deployment has one.
+     * The ID token is only readable inside the host process.
+     */
+    browserIdentity: BrowserIdentityService
+  }
+
   interface Events {
     /**
      * Admit or wrap an authenticated shared API request, including body transfer.
@@ -128,6 +142,12 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
   assertImageBodyCapacity(ctx, maxRequestBodyBytes)
   const browserAuth = await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays)
+  // First-party plugins (for example the PMS assistant) read the SSO identity DSH
+  // already verified instead of re-running a browser login flow.
+  ctx.provide('browserIdentity', {
+    identity: () => browserAuth.identity,
+    idToken: () => browserAuth.identity?.idToken,
+  })
   const connection = new HostConnectionService(ctx, trustedHosts, browserAuth)
   ctx.inject(['webServer'], (webCtx) => {
     assertImageBodyCapacity(webCtx, maxRequestBodyBytes)

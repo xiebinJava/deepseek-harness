@@ -162,7 +162,7 @@ describe('BrowserAuth', () => {
     expect(callback.state.status).toBe(303)
     const cookie = callback.state.headers?.['set-cookie']?.split(';', 1)[0]
     expect(cookie).toBeTruthy()
-    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', { cookie }))).toBe(true)
+    expect(auth.isAuthenticated(request('/', '127.0.0.1:3080', cookie === undefined ? {} : { cookie }))).toBe(true)
     vi.unstubAllGlobals()
   })
 

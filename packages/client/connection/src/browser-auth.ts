@@ -20,6 +20,8 @@ const AUTH_RECORD_KEY = credentialKey('client-connection', 'browser-session')
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1000
 const SECRET_BYTES = 32
 const TOKEN_QUERY = 'token'
+/** Fallback lifetime when an ID token omits `exp` (only used for display/caching). */
+const DEFAULT_IDENTITY_TTL_MS = 5 * 60 * 1000
 const COOKIE_PREFIX = 'dsh-auth-'
 const COOKIE_PAYLOAD_VERSION = 1
 const STORED_SECRET_VERSION = 1
@@ -48,6 +50,17 @@ export interface BrowserAuthOidcConfig {
   readonly jwksUri?: string
 }
 
+/** Identity DSH proved for the current browser session through OIDC. */
+export interface BrowserOidcIdentity {
+  /** The verified ID token, kept so a first-party plugin can relay it to a service that trusts this issuer. */
+  readonly idToken: string
+  /** Claim expiry (epoch ms) of the ID token. */
+  readonly expiresAt: number
+  readonly subject: string
+  readonly email?: string
+  readonly name?: string
+}
+
 interface PendingOidcLogin {
   readonly codeVerifier: string
   readonly nonce: string
@@ -70,6 +83,31 @@ function decodeBase64Url(value: string): Buffer | undefined {
   const padding = '='.repeat((4 - value.length % 4) % 4)
   const decoded = Buffer.from(value.replaceAll('-', '+').replaceAll('_', '/') + padding, 'base64')
   return encodeBase64Url(decoded) === value ? decoded : undefined
+}
+
+/**
+ * Reads the claims of an ID token that {@link BrowserAuth.validateIdToken} just
+ * verified. The token is only decoded here, never trusted on its own.
+ */
+function identityFromToken(idToken: string): BrowserOidcIdentity | undefined {
+  const payloadPart = idToken.split('.')[1]
+  if (payloadPart === undefined) return undefined
+  const decoded = decodeBase64Url(payloadPart)
+  if (decoded === undefined) return undefined
+  try {
+    const claims: unknown = JSON.parse(decoded.toString('utf8'))
+    if (!isRecord(claims) || typeof claims.sub !== 'string') return undefined
+    const exp = typeof claims.exp === 'number' ? claims.exp : undefined
+    return {
+      idToken,
+      expiresAt: exp === undefined ? Date.now() + DEFAULT_IDENTITY_TTL_MS : exp * 1000,
+      subject: claims.sub,
+      ...(typeof claims.email === 'string' ? { email: claims.email } : {}),
+      ...(typeof claims.name === 'string' ? { name: claims.name } : {}),
+    }
+  } catch {
+    return undefined
+  }
 }
 
 function processLaunchToken(owner: object): string {
@@ -209,6 +247,7 @@ export class BrowserAuth {
   private readonly launchToken: string
   private readonly maxAgeMilliseconds: number
   private readonly pendingOidc = new Map<string, PendingOidcLogin>()
+  private oidcIdentity: BrowserOidcIdentity | undefined
 
   private constructor(
     processOwner: object,
@@ -248,6 +287,15 @@ export class BrowserAuth {
    */
   get oidcEnabled(): boolean {
     return this.oidc !== undefined
+  }
+
+  /**
+   * The identity verified by the most recent OIDC login, if any. Plugins that
+   * act as the signed-in person on another first-party service read it here;
+   * it is never exposed to browser code.
+   */
+  get identity(): BrowserOidcIdentity | undefined {
+    return this.oidcIdentity
   }
 
   /**
@@ -364,6 +412,7 @@ export class BrowserAuth {
         throw new Error('OIDC token response has no id_token')
       }
       await this.validateIdToken(body.id_token, pending.nonce)
+      this.oidcIdentity = identityFromToken(body.id_token)
       this.issueCookie(req, res)
     } catch (cause) {
       this.writeOidcError(res, cause instanceof Error ? cause.message : 'OIDC 登录失败')
