@@ -15,6 +15,17 @@ export interface PmsCapabilities {
   queries?: PmsQueryCapability[]
   commands?: PmsCommandCapability[]
   agentContracts?: PmsAgentContractCapability[]
+  /** The account this delegation acts as, published so "我" needs no lookup. */
+  viewer?: PmsViewer
+  /** PMS business date (yyyy-MM-dd), so "今天/本月底" do not rely on the host clock. */
+  today?: string
+}
+
+export interface PmsViewer {
+  id: number
+  displayName?: string
+  username?: string
+  email?: string
 }
 
 export interface PmsAgentContractCapability {
@@ -163,6 +174,12 @@ export interface PmsTaskListQuery {
   status?: string
   page?: number
   pageSize?: number
+}
+
+/** Directory lookup used to turn a person's name into the account id a write needs. */
+export interface PmsPeopleQuery {
+  keyword?: string | undefined
+  limit?: number | undefined
 }
 
 export interface PmsContextLocator {

@@ -350,7 +350,9 @@ describe('drafting and publishing a user-owned Agent', () => {
     expect(preview).toMatchObject({
       agentPreset: 'mine',
       version: 0,
-      availableTools: ['pms_project_list', 'pms_project_get', 'pms_task_list', 'pms_command_preview'],
+      availableTools: [
+        'pms_project_list', 'pms_project_get', 'pms_task_list', 'pms_people_list', 'pms_command_preview',
+      ],
       blockedTools: ['pms_command_execute'],
     })
     expect(preview.revision).toMatch(/^[a-f0-9]{64}$/)

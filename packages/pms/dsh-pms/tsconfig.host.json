@@ -11,12 +11,16 @@
     "src/types.ts",
     "src/remote.ts",
     "src/auth/pms-auth-store.ts",
+    "src/auth/pms-credential-store.ts",
+    "src/auth/pms-sso-session.ts",
+    "src/auth/pms-sso-credentials.ts",
     "src/client/PmsIntegrationClient.ts",
     "src/context/pms-context-store.ts",
     "src/context/pms-session-tags.ts",
     "src/tools/project-list.ts",
     "src/tools/project-detail.ts",
     "src/tools/task-list.ts",
+    "src/tools/people-list.ts",
     "src/tools/query.ts",
     "src/tools/command.ts"
   ],
@@ -26,6 +30,7 @@
     { "path": "../../core/session" },
     { "path": "../../core/system-prompt" },
     { "path": "../../core/tools" },
-    { "path": "../../typert/protocol" }
+    { "path": "../../typert/protocol" },
+    { "path": "../../credentials/credentials" }
   ]
 }

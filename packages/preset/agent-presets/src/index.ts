@@ -273,7 +273,9 @@ export class AgentPresets extends TypertRemoteService {
   private selectionPolicy(): { enabled: boolean; defaultId: string } {
     const settings = this.settings?.get()
     if (settings === undefined) return { enabled: true, defaultId: this.config.default }
-    const enabled = settings.modeSelectionEnabled
+    // The registration base defaults this to true, but a document written by an
+    // older surface may omit it; treat "unstated" as the default, not as "off".
+    const enabled = settings.modeSelectionEnabled ?? true
     return {
       enabled,
       defaultId: enabled ? settings.default : this.config.default,

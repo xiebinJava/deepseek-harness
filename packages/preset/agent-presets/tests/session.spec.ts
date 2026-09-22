@@ -62,7 +62,7 @@ describe('agent preset selection projection', () => {
 describe('agent composition fingerprint projection', () => {
   it('starts absent for legacy headers and clears identity for legacy selections', () => {
     const definition = agentCompositionFingerprintProjectionDefinition
-    let state = definition.init(header('standard'))
+    let state: string | null = definition.init()
     expect(state).toBeNull()
 
     state = definition.apply(state, {

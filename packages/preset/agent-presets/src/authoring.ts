@@ -58,7 +58,7 @@ const REGISTERED_PLUGIN_MODULES: Readonly<Record<string, { name: string; config:
 
 /** Tool inventory used by the non-executing draft preview. */
 const PREVIEW_TOOLS: Readonly<Record<string, readonly string[]>> = {
-  pms: ['pms_project_list', 'pms_project_get', 'pms_task_list', 'pms_command_preview'],
+  pms: ['pms_project_list', 'pms_project_get', 'pms_task_list', 'pms_people_list', 'pms_command_preview'],
 }
 
 /** Destructive tools are never available to the draft preview. */

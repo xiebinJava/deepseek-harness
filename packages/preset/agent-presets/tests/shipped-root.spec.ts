@@ -122,12 +122,11 @@ describe('the shipped preset root', () => {
     const prefix = (persona?.config as { prefix?: unknown } | undefined)?.prefix
 
     expect(prefix).toEqual(expect.any(String))
-    expect(prefix).toContain('回答规范')
+    expect(prefix).toContain('PMS 业务系统 Agent')
     expect(prefix).toContain('结论先行')
     expect(prefix).toContain('只依据本次工具返回的数据')
-    expect(prefix).toContain('不得猜测')
-    expect(prefix).toContain('必须先生成预览')
-    expect(prefix).toContain('明确确认同一份预览')
+    expect(prefix).toContain('先生成预览')
+    expect(prefix).toContain('不要请求确认')
   })
 
   it('prepends the shipped root before configured roots and the derived user root', async () => {

@@ -6,9 +6,32 @@ and, when mounted by the PMS Agent, exposes these PMS tools:
 - `pms_project_list`
 - `pms_project_get`
 - `pms_task_list`
+- `pms_people_list`
 - `pms_query`
 - `pms_command_preview`
 - `pms_command_execute`
+
+The command surface is **published by PMS capabilities, not hardcoded here**: the
+plugin mounts whatever the current delegation publishes (`tools: ['*']`) and the
+preview tool rejects a command name that PMS does not advertise. Adding a PMS
+command therefore needs no change in this package. Node editing is generic too:
+
+- `node.field.update` writes any node workbench field (one adapter per workbench in PMS),
+- `batch.write` runs up to 20 registered writes behind one preview and one execution.
+
+Which commands a node accepts comes from that node's Agent contract, which PMS
+publishes per workflow node and the plugin resolves by `workflowNodeKeys`.
+
+## Signing in
+
+PMS identity and page context come from the DSH browser session. When the PMS
+deployment enables `pms.dsh.sso-session-enabled` and this plugin has a
+`serviceKey`, the host also exchanges the SSO ID token it already verified
+(`browserIdentity` from `client-connection`) for a normal PMS session, persists
+it through the credentials seam, and rotates it as needed. That is what makes a
+plain DSH conversation work without the embedded PMS page, survive browser
+refreshes, and stop the moment the user logs out of PMS (PMS revokes the
+session it issued).
 
 The plugin calls PMS only through `/api/integration/dsh/v1/*`. It does not read
 the PMS database directly; PMS remains the source of business data and final

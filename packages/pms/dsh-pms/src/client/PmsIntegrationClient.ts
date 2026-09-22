@@ -9,12 +9,34 @@ import type {
   PmsOperationBinding,
   PmsProjectListQuery,
   PmsJsonObject,
+  PmsPeopleQuery,
   PmsQueryRequest,
   PmsQueryResult,
   PmsTaskListQuery,
 } from '../types.ts'
 import type { PmsAuthCode, PmsAuthStore } from '../auth/pms-auth-store.ts'
 import { randomUUID } from 'node:crypto'
+
+/**
+ * Host-provided PMS session for the signed-in person. It acquires a session
+ * from SSO when none is held, rotates it when PMS rejects it, and persists it
+ * across DSH restarts, so a plain conversation keeps working without the
+ * embedded PMS page.
+ */
+export interface PmsCredentialProvider {
+  /** Current PMS access token, acquiring or rotating a session as needed. */
+  accessToken(): Promise<string | undefined>
+  /** Force a rotation after PMS rejected the held session; `undefined` means it cannot be recovered. */
+  refresh(): Promise<string | undefined>
+  /** Drop the held session locally without treating it as a revocation. */
+  clear(): Promise<void>
+  /**
+   * PMS rejected the held session. The provider must stop supplying tokens for
+   * the current SSO login instead of minting a replacement session, so "log out
+   * of PMS" really does sign the assistant out.
+   */
+  suspend(): Promise<void>
+}
 
 export interface PmsIntegrationClientOptions {
   baseUrl: string
@@ -28,6 +50,7 @@ export interface PmsIntegrationClientOptions {
   allowLegacyUserTokenExchange?: boolean
   agentVersion?: string
   workspaceType?: string
+  credentials?: PmsCredentialProvider
   authStore?: PmsAuthStore
   /** How long to wait for the browser bridge to publish a replacement code. */
   authCodeRefreshWaitMs?: number
@@ -63,6 +86,7 @@ export class PmsIntegrationClient {
   private readonly agentVersion: string
   private readonly workspaceType: string
   private readonly authStore: PmsAuthStore | undefined
+  private readonly credentials: PmsCredentialProvider | undefined
   private readonly authCodeRefreshWaitMs: number
   private readonly requestTimeoutMs: number
   private readonly fetchImpl: typeof fetch
@@ -89,6 +113,7 @@ export class PmsIntegrationClient {
     this.agentVersion = options.agentVersion?.trim() ?? ''
     this.workspaceType = options.workspaceType?.trim() ?? ''
     this.authStore = options.authStore
+    this.credentials = options.credentials
     this.authCodeRefreshWaitMs = options.authCodeRefreshWaitMs ?? 5_000
     this.requestTimeoutMs = options.requestTimeoutMs
     this.fetchImpl = options.fetchImpl ?? fetch
@@ -117,6 +142,7 @@ export class PmsIntegrationClient {
       agentVersion: this.agentVersion,
       workspaceType: this.workspaceType,
       ...(this.authStore === undefined ? {} : { authStore: this.authStore }),
+      ...(this.credentials === undefined ? {} : { credentials: this.credentials }),
       authCodeRefreshWaitMs: this.authCodeRefreshWaitMs,
       requestTimeoutMs: this.requestTimeoutMs,
       fetchImpl: this.fetchImpl,
@@ -213,6 +239,16 @@ export class PmsIntegrationClient {
       .then(() => this.post<PmsQueryResult>('/integration/dsh/v1/query', request, signal, sessionId))
   }
 
+  people(query: PmsPeopleQuery, signal?: AbortSignal, sessionId?: string): Promise<PmsJsonObject> {
+    return this.withCapability('pms_people_list', signal, sessionId)
+      .then(() => this.get<PmsJsonObject>(
+        '/integration/dsh/v1/people',
+        { keyword: query.keyword, limit: query.limit },
+        signal,
+        sessionId,
+      ))
+  }
+
   previewCommand(
     request: PmsCommandPreviewRequest,
     signal?: AbortSignal,
@@ -301,10 +337,16 @@ export class PmsIntegrationClient {
           if (response.status === 401
               && !refreshedAfterUnauthorized
               && this.accessToken === ''
-              && this.authStore !== undefined
-              && resolvedSessionId !== '') {
+              && resolvedSessionId !== ''
+              && (this.authStore !== undefined || this.credentials !== undefined)) {
             refreshedAfterUnauthorized = true
             this.exchangedTokens.delete(resolvedSessionId)
+            // A held session was rejected: rotate it once before giving up, so a
+            // rotation that happened elsewhere does not surface as a failure.
+            if (this.credentials !== undefined) {
+              const rotated = await this.credentials.refresh()
+              if (rotated === undefined) await this.credentials.suspend()
+            }
             accessToken = await this.resolveAccessToken(signal, sessionId)
             continue
           }
@@ -384,8 +426,18 @@ export class PmsIntegrationClient {
       }
       return exchangePromise
     }
-    if (!this.allowLegacyUserTokenExchange
-      || this.pmsUserToken === '' || this.serviceKey === '' || resolvedSessionId === '' || this.agentId === '') {
+    // A host-provided session (SSO-derived and persisted) is authoritative when
+    // it exists; the historical static token stays as a fallback.
+    const provided = this.pmsUserToken === '' ? await this.credentials?.accessToken() : undefined
+    const userToken = this.pmsUserToken !== '' ? this.pmsUserToken : provided
+    if (userToken === undefined || userToken === ''
+      || this.serviceKey === '' || resolvedSessionId === '' || this.agentId === '') {
+      throw new PmsIntegrationError('PMS 登录态不可用，请重新打开 PMS 工作区或重新登录 DSH', {
+        status: 401,
+        code: 'PMS_AUTH_REQUIRED',
+      })
+    }
+    if (this.pmsUserToken !== '' && !this.allowLegacyUserTokenExchange) {
       throw new PmsIntegrationError('PMS 登录态不可用，请重新打开 PMS 工作区', {
         status: 401,
         code: 'PMS_AUTH_REQUIRED',
@@ -395,7 +447,7 @@ export class PmsIntegrationClient {
     if (cached !== undefined && cached.expiresAt - 5000 > Date.now()) return cached.value
     let exchangePromise = this.exchangePromises.get(resolvedSessionId)
     if (exchangePromise === undefined) {
-      exchangePromise = this.exchangeToken(resolvedSessionId, signal).finally(() => {
+      exchangePromise = this.exchangeToken(resolvedSessionId, userToken, signal).finally(() => {
         this.exchangePromises.delete(resolvedSessionId)
       })
       this.exchangePromises.set(resolvedSessionId, exchangePromise)
@@ -513,7 +565,7 @@ export class PmsIntegrationClient {
     }
   }
 
-  private async exchangeToken(dshSessionId: string, signal?: AbortSignal): Promise<string> {
+  private async exchangeToken(dshSessionId: string, userToken: string, signal?: AbortSignal): Promise<string> {
     const requestId = this.requestIdFactory()
     const controller = new AbortController()
     const timer = setTimeout(() => { controller.abort(new Error('PMS token exchange timeout')) }, this.requestTimeoutMs)
@@ -527,7 +579,7 @@ export class PmsIntegrationClient {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.pmsUserToken}`,
+          Authorization: `Bearer ${userToken}`,
           'X-DSH-Service-Key': this.serviceKey,
           'X-Request-Id': requestId,
         },
@@ -624,6 +676,7 @@ const TOOL_SCOPES: Readonly<Record<string, string>> = {
   pms_project_list: 'pms:project:read',
   pms_project_get: 'pms:project:read',
   pms_task_list: 'pms:task:read',
+  pms_people_list: 'pms:project:read',
   pms_command_preview: 'pms:command:preview',
   pms_command_execute: 'pms:command:execute',
 }
@@ -703,6 +756,7 @@ function toolName(path: string): string {
   if (path.endsWith('/projects')) return 'pms_project_list'
   if (/\/projects\/[^/]+\/tasks$/u.test(path)) return 'pms_task_list'
   if (/\/projects\/[^/]+$/u.test(path)) return 'pms_project_get'
+  if (path.endsWith('/people')) return 'pms_people_list'
   if (path.endsWith('/query')) return 'pms_query'
   if (/\/agent-contracts\/[^/]+\/[^/]+$/u.test(path)) return 'pms_agent_contract'
   if (path.endsWith('/commands/preview')) return 'pms_command_preview'
